@@ -151,7 +151,7 @@ class VoiceComplaintSerializer(serializers.ModelSerializer):
         return obj.worker.user.get_full_name()
 
     def get_worker_employer(self, obj):
-        contract = obj.worker.domestic_contracts.filter(status='ACTIVE').first()
+        contract = obj.worker.contracts.filter(status='ACTIVE').first()
         if contract:
             return contract.employer.user.get_full_name()
         return None
