@@ -1,6 +1,6 @@
-# Environnement
-.env
-*.env
+# Environnement (décommenter quand le .env ne doit plus être suivi)
+# .env
+*.env.example.local
 
 # Python
 __pycache__/
