@@ -4,11 +4,13 @@ from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Count
 
-from .models import SystemConfiguration, AuditLog, BackupLog, MaintenanceMode, Permission, Role
+from .models import SystemConfiguration, AuditLog, BackupLog, MaintenanceMode, Permission, Role, RolePermission
 from .serializers import (
     SystemConfigurationSerializer, AuditLogSerializer, BackupLogSerializer,
-    MaintenanceModeSerializer, PermissionSerializer, RoleSerializer
+    MaintenanceModeSerializer, PermissionSerializer, RoleSerializer,
+    RolePermissionSerializer, UserAdminSerializer, UserAdminCreateSerializer,
 )
+from users.models import User
 
 
 class SystemConfigurationViewSet(viewsets.ModelViewSet):
@@ -102,3 +104,47 @@ class RoleViewSet(viewsets.ModelViewSet):
     queryset = Role.objects.all()
     serializer_class = RoleSerializer
     permission_classes = [permissions.IsAdminUser]
+
+
+class RolePermissionViewSet(viewsets.ModelViewSet):
+    queryset = RolePermission.objects.all()
+    serializer_class = RolePermissionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @action(detail=False, methods=['post'])
+    def save_matrix(self, request):
+        """Remplace toute la matrice depuis le frontend (localStorage sync)"""
+        matrix = request.data.get('matrix', {})
+
+        RolePermission.objects.all().delete()
+
+        to_create = [
+            RolePermission(role=role_key, permission=perm_key)
+            for role_key, perms in matrix.items()
+            for perm_key, granted in perms.items()
+            if granted
+        ]
+        RolePermission.objects.bulk_create(to_create, ignore_conflicts=True)
+
+        return Response({'message': 'Matrice enregistrée', 'count': len(to_create)})
+
+
+class UserAdminViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all().order_by('last_name', 'first_name')
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return UserAdminCreateSerializer
+        return UserAdminSerializer
+
+    def get_queryset(self):
+        qs = User.objects.all().order_by('last_name', 'first_name')
+        q = self.request.query_params.get('q', '').strip()
+        if q:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(first_name__icontains=q) | Q(last_name__icontains=q) |
+                Q(email__icontains=q) | Q(phone_number__icontains=q)
+            )
+        return qs

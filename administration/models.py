@@ -204,6 +204,33 @@ class Permission(models.Model):
         return f"{self.code} - {self.name}"
 
 
+class RolePermission(models.Model):
+    """Matrice droits/rôles — synchronisée depuis le frontend"""
+
+    ROLE_CHOICES = [
+        ('ADMIN', 'Administrateur'),
+        ('DIRECTEUR_GENERAL', 'Directeur Général'),
+        ('DIRECTEUR_REGIONAL', 'Directeur Régional'),
+        ('CHEF_INSPECTION', "Chef d'Inspection"),
+        ('INSPECTEUR', 'Inspecteur du Travail'),
+        ('EMPLOYEUR', 'Employeur'),
+        ('EMPLOYE', 'Employé'),
+    ]
+
+    role = models.CharField(max_length=30, choices=ROLE_CHOICES, verbose_name='Rôle')
+    permission = models.CharField(max_length=100, verbose_name='Permission')
+    description = models.CharField(max_length=255, blank=True, verbose_name='Description')
+
+    class Meta:
+        unique_together = ('role', 'permission')
+        verbose_name = 'Droit par rôle'
+        verbose_name_plural = 'Droits par rôle'
+        ordering = ['role', 'permission']
+
+    def __str__(self):
+        return f"{self.role} — {self.permission}"
+
+
 class Role(models.Model):
     """Rôle avec permissions"""
 

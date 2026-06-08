@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import SystemConfiguration, AuditLog, BackupLog, MaintenanceMode, Permission, Role
+from .models import SystemConfiguration, AuditLog, BackupLog, MaintenanceMode, Permission, Role, RolePermission
+from users.models import User
 
 
 class SystemConfigurationSerializer(serializers.ModelSerializer):
@@ -51,3 +52,42 @@ class RoleSerializer(serializers.ModelSerializer):
 
     def get_permissions_count(self, obj):
         return obj.permissions.count()
+
+
+class RolePermissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolePermission
+        fields = ['id', 'role', 'permission', 'description']
+
+
+class UserAdminSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'full_name',
+            'phone_number', 'user_type', 'is_active', 'is_verified',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'full_name']
+
+    def get_full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}".strip()
+
+
+class UserAdminCreateSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=8)
+
+    class Meta:
+        model = User
+        fields = ['email', 'first_name', 'last_name', 'phone_number', 'user_type', 'password']
+
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        user = User(**validated_data)
+        user.set_password(password)
+        user.is_active = True
+        user.is_verified = True
+        user.save()
+        return user
