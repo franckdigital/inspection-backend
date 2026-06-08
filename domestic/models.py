@@ -201,6 +201,16 @@ class DomesticContract(models.Model):
     )
     signed_at = models.DateTimeField(null=True, blank=True, verbose_name='Date de signature')
 
+    # Inspecteur du travail affecté à ce contrat (auto-assigné à l'activation)
+    inspector = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='supervised_contracts',
+        verbose_name='Inspecteur du travail',
+    )
+
     # Document PDF
     contract_pdf = models.FileField(
         upload_to='domestic/contracts/',

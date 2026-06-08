@@ -37,18 +37,24 @@ class DomesticEmployerSerializer(serializers.ModelSerializer):
 class DomesticContractSerializer(serializers.ModelSerializer):
     worker_name = serializers.SerializerMethodField()
     employer_name = serializers.SerializerMethodField()
+    inspector_name = serializers.SerializerMethodField()
     is_fully_signed = serializers.SerializerMethodField()
 
     class Meta:
         model = DomesticContract
         fields = '__all__'
-        read_only_fields = ('created_at', 'updated_at', 'signed_at')
+        read_only_fields = ('created_at', 'updated_at', 'signed_at', 'inspector')
 
     def get_worker_name(self, obj):
         return obj.worker.user.get_full_name()
 
     def get_employer_name(self, obj):
         return obj.employer.user.get_full_name()
+
+    def get_inspector_name(self, obj):
+        if obj.inspector:
+            return obj.inspector.get_full_name()
+        return None
 
     def get_is_fully_signed(self, obj):
         return obj.is_fully_signed()

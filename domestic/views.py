@@ -46,6 +46,58 @@ def is_admin_or_inspector(user) -> bool:
     ]
 
 
+def _auto_assign_inspector(contract: DomesticContract) -> None:
+    """
+    Affecte l'inspecteur compétent à un contrat qui devient ACTIVE.
+    Priorité : chef de la zone → premier inspecteur actif.
+    """
+    if contract.inspector:
+        return  # déjà assigné
+
+    from inspections.models import InspectionZone
+    from users.models import User as UserModel
+
+    # Cherche la commune du worker (champ city sur l'utilisateur)
+    city = getattr(contract.worker.user, 'city', '') or ''
+
+    if city:
+        zone = InspectionZone.objects.filter(city__icontains=city, is_active=True).first()
+        if zone and zone.head_inspector and zone.head_inspector.is_active:
+            contract.inspector = zone.head_inspector
+            return
+
+    # Fallback : premier inspecteur actif en base
+    fallback = UserModel.objects.filter(user_type='INSPECTEUR', is_active=True).first()
+    if fallback:
+        contract.inspector = fallback
+
+
+def _resolve_inspector_for_complaint(worker, commune: str):
+    """
+    Retourne l'inspecteur à affecter à une plainte vocale.
+    Ordre de priorité :
+    1. L'inspecteur déjà lié au contrat actif du worker
+    2. Le chef de la zone couvrant la commune de la plainte
+    3. Premier inspecteur actif en base
+    """
+    from inspections.models import InspectionZone
+    from users.models import User as UserModel
+
+    # 1. Inspecteur du contrat actif
+    active_contract = worker.contracts.filter(status='ACTIVE').select_related('inspector').first()
+    if active_contract and active_contract.inspector and active_contract.inspector.is_active:
+        return active_contract.inspector
+
+    # 2. Chef de zone selon la commune
+    if commune:
+        zone = InspectionZone.objects.filter(city__icontains=commune, is_active=True).first()
+        if zone and zone.head_inspector and zone.head_inspector.is_active:
+            return zone.head_inspector
+
+    # 3. Fallback
+    return UserModel.objects.filter(user_type='INSPECTEUR', is_active=True).first()
+
+
 # ── Workers ───────────────────────────────────────────────────────────────────
 
 class DomesticWorkerViewSet(viewsets.ModelViewSet):
@@ -208,20 +260,26 @@ class DomesticContractViewSet(viewsets.ModelViewSet):
         if contract.is_fully_signed() and contract.status == 'PENDING_SIGNATURE':
             contract.status = 'ACTIVE'
             contract.signed_at = timezone.now()
+            _auto_assign_inspector(contract)
 
         contract.save()
         return Response({
             'message': f'Signature {role} enregistrée',
             'is_fully_signed': contract.is_fully_signed(),
-            'status': contract.status
+            'status': contract.status,
+            'inspector': contract.inspector.get_full_name() if contract.inspector else None,
         })
 
     @action(detail=True, methods=['post'])
     def activate(self, request, pk=None):
         contract = self.get_object()
         contract.status = 'ACTIVE'
+        _auto_assign_inspector(contract)
         contract.save()
-        return Response({'message': 'Contrat activé'})
+        return Response({
+            'message': 'Contrat activé',
+            'inspector': contract.inspector.get_full_name() if contract.inspector else None,
+        })
 
     @action(detail=True, methods=['post'])
     def terminate(self, request, pk=None):
@@ -592,7 +650,7 @@ class OvertimeSessionViewSet(viewsets.GenericViewSet):
                 from datetime import date as date_cls
                 d = date_cls.fromisoformat(date_str)
                 worker = DomesticWorker.objects.get(user=request.user)
-                contract = worker.domestic_contracts.filter(status='ACTIVE').first()
+                contract = worker.contracts.filter(status='ACTIVE').first()
                 tracking = TimeTracking.objects.filter(contract=contract, date=d).first()
                 if not tracking:
                     return Response([])
@@ -679,19 +737,12 @@ class VoiceComplaintViewSet(viewsets.ModelViewSet):
             transcription_status='PENDING',
         )
 
-        # Auto-assign inspector from the worker's inspection zone
-        from inspections.models import InspectionZone
-        from users.models import User as UserModel
+        # Résoudre l'inspecteur compétent (contrat actif → zone → fallback)
         commune = d.get('commune', '')
-        if commune:
-            zone = InspectionZone.objects.filter(city__icontains=commune).first()
-            if zone:
-                inspector = UserModel.objects.filter(
-                    user_type='INSPECTEUR', is_active=True
-                ).first()
-                if inspector:
-                    vc.assigned_inspector = inspector
-                    vc.status = 'ASSIGNED'
+        inspector = _resolve_inspector_for_complaint(worker, commune)
+        if inspector:
+            vc.assigned_inspector = inspector
+            vc.status = 'ASSIGNED'
 
         vc.save()
 
