@@ -291,6 +291,42 @@ class DomesticContractViewSet(viewsets.ModelViewSet):
         contract.save()
         return Response({'message': 'Contrat terminé'})
 
+    @action(detail=True, methods=['post'], url_path='assign-inspector')
+    def assign_inspector(self, request, pk=None):
+        """Admin : affecter manuellement un inspecteur à un contrat."""
+        if request.user.user_type not in ('ADMIN', 'CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL'):
+            return Response({'detail': 'Accès réservé aux administrateurs.'}, status=status.HTTP_403_FORBIDDEN)
+        contract = self.get_object()
+        inspector_id = request.data.get('inspector_id')
+        if not inspector_id:
+            return Response({'detail': 'inspector_id requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        from users.models import User as UserModel
+        try:
+            inspector = UserModel.objects.get(
+                id=inspector_id,
+                user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'],
+                is_active=True,
+            )
+        except UserModel.DoesNotExist:
+            return Response({'detail': 'Inspecteur introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        contract.inspector = inspector
+        contract.save(update_fields=['inspector'])
+        return Response({
+            'message': 'Inspecteur affecté avec succès.',
+            'inspector': inspector.get_full_name(),
+            'inspector_id': inspector.id,
+        })
+
+    @action(detail=False, methods=['get'], url_path='unassigned')
+    def unassigned(self, request):
+        """Liste des contrats actifs sans inspecteur assigné."""
+        if request.user.user_type not in ('ADMIN', 'CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL'):
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+        contracts = DomesticContract.objects.filter(
+            status='ACTIVE', inspector__isnull=True
+        ).select_related('worker__user', 'employer__user')
+        return Response(DomesticContractSerializer(contracts, many=True).data)
+
 
 # ── Time Tracking (Pointage) ──────────────────────────────────────────────────
 
@@ -769,10 +805,13 @@ class VoiceComplaintViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):
+        from django.db.models import Q
         user = self.request.user
         if is_admin_or_inspector(user):
             if user.user_type in ('INSPECTEUR', 'CHEF_INSPECTION'):
-                return VoiceComplaint.objects.filter(assigned_inspector=user)
+                return VoiceComplaint.objects.filter(
+                    Q(assigned_inspector=user) | Q(assistance_inspector=user)
+                )
             return VoiceComplaint.objects.all()
         if user.user_type in ('EMPLOYE_MAISON', 'EMPLOYE'):
             try:
@@ -844,13 +883,61 @@ class VoiceComplaintViewSet(viewsets.ModelViewSet):
         vc.save()
         return Response(VoiceComplaintSerializer(vc, context={'request': request}).data)
 
+    @action(detail=False, methods=['get'], url_path='inspectors-in-unit')
+    def inspectors_in_unit(self, request):
+        """Liste des inspecteurs disponibles pour une assistance linguistique."""
+        if not is_admin_or_inspector(request.user):
+            return Response({'detail': 'Accès réservé aux inspecteurs.'}, status=status.HTTP_403_FORBIDDEN)
+        from users.models import User as UserModel
+        inspectors = UserModel.objects.filter(
+            user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'],
+            is_active=True,
+        ).exclude(id=request.user.id).order_by('first_name', 'last_name')
+        return Response([{
+            'id': i.id,
+            'name': i.get_full_name(),
+            'email': i.email,
+            'user_type': i.user_type,
+        } for i in inspectors])
+
     @action(detail=True, methods=['post'], url_path='request-assistance')
     def request_assistance(self, request, pk=None):
         vc = self.get_object()
+        inspector_id = request.data.get('inspector_id')
+        if not inspector_id:
+            return Response({'detail': 'inspector_id requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        from users.models import User as UserModel
+        try:
+            assistant = UserModel.objects.get(
+                id=inspector_id,
+                user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'],
+                is_active=True,
+            )
+        except UserModel.DoesNotExist:
+            return Response({'detail': 'Inspecteur introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        vc.assistance_inspector = assistant
         vc.language_assistance_requested = True
         vc.status = 'ASSISTANCE_REQUESTED'
         vc.save()
-        return Response({'detail': 'Demande d\'assistance linguistique envoyée.'})
+        return Response(VoiceComplaintSerializer(vc, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='submit-assistance-note')
+    def submit_assistance_note(self, request, pk=None):
+        """L'inspecteur assistant soumet sa note d'interprétation."""
+        vc = self.get_object()
+        if vc.assistance_inspector_id != request.user.id:
+            return Response(
+                {'detail': "Action réservée à l'inspecteur assistant désigné."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        note = request.data.get('note', '').strip()
+        if not note:
+            return Response({'detail': 'La note ne peut pas être vide.'}, status=status.HTTP_400_BAD_REQUEST)
+        vc.assistance_note = note
+        vc.assistance_responded_at = timezone.now()
+        vc.status = 'IN_PROGRESS'
+        vc.save()
+        return Response(VoiceComplaintSerializer(vc, context={'request': request}).data)
 
 
 # ── Visites de terrain ────────────────────────────────────────────────────────

@@ -148,6 +148,7 @@ class VoiceComplaintSerializer(serializers.ModelSerializer):
     worker_employer = serializers.SerializerMethodField()
     worker_commune = serializers.SerializerMethodField()
     inspector_name = serializers.SerializerMethodField()
+    assistance_inspector_name = serializers.SerializerMethodField()
     audio_file_url = serializers.SerializerMethodField()
     response_audio_url = serializers.SerializerMethodField()
     duration_display = serializers.SerializerMethodField()
@@ -158,6 +159,7 @@ class VoiceComplaintSerializer(serializers.ModelSerializer):
         read_only_fields = (
             'case_number', 'created_at', 'updated_at', 'assigned_inspector',
             'transcription_original', 'transcription_french', 'transcription_status',
+            'assistance_inspector', 'assistance_responded_at',
         )
 
     def get_worker_name(self, obj):
@@ -175,6 +177,11 @@ class VoiceComplaintSerializer(serializers.ModelSerializer):
     def get_inspector_name(self, obj):
         if obj.assigned_inspector:
             return obj.assigned_inspector.get_full_name()
+        return None
+
+    def get_assistance_inspector_name(self, obj):
+        if obj.assistance_inspector:
+            return obj.assistance_inspector.get_full_name()
         return None
 
     def get_audio_file_url(self, obj):

@@ -5,12 +5,13 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from datetime import datetime, timedelta
 
-from .models import InspectionZone, InspectionRecord
+from .models import InspectionZone, InspectionRecord, Commune, InspectorZoneAssignment
 from .serializers import (
     InspectionZoneSerializer, InspectionZoneDetailSerializer,
     InspectionRecordSerializer, InspectionRecordDetailSerializer,
     InspectionRecordCreateSerializer, CompleteInspectionSerializer,
-    InspectorScheduleSerializer
+    InspectorScheduleSerializer,
+    CommuneSerializer, InspectorZoneAssignmentSerializer,
 )
 from enterprises.models import EnterpriseHistory
 
@@ -51,9 +52,8 @@ class InspectionZoneViewSet(viewsets.ModelViewSet):
         """Statistiques de la zone"""
         zone = self.get_object()
         return Response({
-            'inspectors_count': zone.inspectors.count(),
-            'enterprises_count': zone.enterprises.count(),
-            'complaints_count': zone.complaints.count(),
+            'inspectors_count': zone.inspector_assignments.filter(is_active=True).count(),
+            'communes_count': zone.communes.filter(is_active=True).count(),
             'inspections_count': InspectionRecord.objects.filter(
                 enterprise__inspection_zone=zone
             ).count(),
@@ -62,6 +62,38 @@ class InspectionZoneViewSet(viewsets.ModelViewSet):
                 is_completed=True
             ).count(),
         })
+
+    @action(detail=True, methods=['post'], url_path='assign-inspector')
+    def assign_inspector(self, request, pk=None):
+        """Affecter un inspecteur à la zone."""
+        zone = self.get_object()
+        inspector_id  = request.data.get('inspector_id')
+        role          = request.data.get('role', 'MEMBER')
+        languages     = request.data.get('languages_spoken', [])
+        if not inspector_id:
+            return Response({'detail': 'inspector_id requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        from users.models import User as UserModel
+        try:
+            inspector = UserModel.objects.get(
+                id=inspector_id,
+                user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'],
+                is_active=True,
+            )
+        except UserModel.DoesNotExist:
+            return Response({'detail': 'Inspecteur introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        assignment, created = InspectorZoneAssignment.objects.update_or_create(
+            zone=zone, inspector=inspector,
+            defaults={'role': role, 'languages_spoken': languages, 'is_active': True},
+        )
+        return Response(InspectorZoneAssignmentSerializer(assignment).data,
+                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=True, methods=['delete'], url_path='remove-inspector/(?P<inspector_id>[^/.]+)')
+    def remove_inspector(self, request, pk=None, inspector_id=None):
+        """Retirer un inspecteur de la zone."""
+        zone = self.get_object()
+        InspectorZoneAssignment.objects.filter(zone=zone, inspector_id=inspector_id).update(is_active=False)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class InspectionRecordViewSet(viewsets.ModelViewSet):
@@ -362,4 +394,25 @@ class InspectionRecordViewSet(viewsets.ModelViewSet):
             'total_inspections': len(route),
             'route': InspectionRecordSerializer(route, many=True).data
         })
+
+
+# ── Communes ──────────────────────────────────────────────────────────────────
+
+class CommuneViewSet(viewsets.ModelViewSet):
+    queryset = Commune.objects.filter(is_active=True).select_related('zone')
+    serializer_class = CommuneSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ['zone', 'city', 'region', 'is_active']
+    search_fields = ['name', 'code', 'city']
+
+
+# ── Inspector zone assignments ─────────────────────────────────────────────────
+
+class InspectorZoneAssignmentViewSet(viewsets.ModelViewSet):
+    queryset = InspectorZoneAssignment.objects.filter(is_active=True).select_related('zone', 'inspector')
+    serializer_class = InspectorZoneAssignmentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['zone', 'inspector', 'role', 'is_active']
 

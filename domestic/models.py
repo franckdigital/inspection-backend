@@ -565,6 +565,15 @@ class VoiceComplaint(models.Model):
     language_assistance_requested = models.BooleanField(
         default=False, verbose_name='Assistance linguistique demandée'
     )
+    assistance_inspector = models.ForeignKey(
+        'users.User',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='linguistic_assistance_cases',
+        verbose_name='Inspecteur assistant'
+    )
+    assistance_note = models.TextField(blank=True, verbose_name="Note d'interprétation")
+    assistance_responded_at = models.DateTimeField(null=True, blank=True, verbose_name='Date réponse assistance')
 
     # Langue choisie par l'utilisateur avant l'enregistrement
     selected_language = models.CharField(

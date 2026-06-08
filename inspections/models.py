@@ -41,6 +41,50 @@ class InspectionZone(models.Model):
         return f"{self.name} ({self.code})"
 
 
+class Commune(models.Model):
+    """Commune ou sous-préfecture rattachée à une zone d'inspection."""
+    name   = models.CharField(max_length=100, verbose_name='Nom')
+    code   = models.CharField(max_length=20, unique=True, blank=True, verbose_name='Code')
+    zone   = models.ForeignKey(
+        InspectionZone, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='communes', verbose_name="Zone d'inspection"
+    )
+    city   = models.CharField(max_length=100, blank=True, verbose_name='Ville')
+    region = models.CharField(max_length=100, blank=True, verbose_name='Région')
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Commune'
+        verbose_name_plural = 'Communes'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class InspectorZoneAssignment(models.Model):
+    """Affectation d'un inspecteur à une zone (avec rôle et langues)."""
+    ROLE_CHOICES = (
+        ('HEAD',   "Chef d'inspection"),
+        ('MEMBER', 'Inspecteur membre'),
+    )
+    zone      = models.ForeignKey(InspectionZone, on_delete=models.CASCADE, related_name='inspector_assignments')
+    inspector = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='zone_assignments')
+    role      = models.CharField(max_length=20, choices=ROLE_CHOICES, default='MEMBER')
+    languages_spoken = models.JSONField(default=list, blank=True, verbose_name='Langues parlées')
+    is_active = models.BooleanField(default=True)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Affectation inspecteur-zone'
+        verbose_name_plural = 'Affectations inspecteur-zone'
+        unique_together = ['zone', 'inspector']
+        ordering = ['-assigned_at']
+
+    def __str__(self):
+        return f"{self.inspector.get_full_name()} → {self.zone.name} ({self.get_role_display()})"
+
+
 class InspectionRecord(models.Model):
     INSPECTION_TYPE_CHOICES = (
         ('ROUTINE', 'Routine'),

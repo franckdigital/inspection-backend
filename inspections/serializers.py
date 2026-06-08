@@ -1,13 +1,49 @@
 from rest_framework import serializers
-from .models import InspectionZone, InspectionRecord
+from .models import InspectionZone, InspectionRecord, Commune, InspectorZoneAssignment
 from users.serializers import UserDetailSerializer
 from enterprises.serializers import EnterpriseSerializer
 
 
+class CommuneSerializer(serializers.ModelSerializer):
+    zone_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Commune
+        fields = '__all__'
+
+    def get_zone_name(self, obj):
+        return obj.zone.name if obj.zone else None
+
+
+class InspectorZoneAssignmentSerializer(serializers.ModelSerializer):
+    inspector_name  = serializers.SerializerMethodField()
+    inspector_email = serializers.SerializerMethodField()
+    role_display    = serializers.SerializerMethodField()
+    zone_name       = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InspectorZoneAssignment
+        fields = '__all__'
+        read_only_fields = ('assigned_at',)
+
+    def get_inspector_name(self, obj):
+        return obj.inspector.get_full_name()
+
+    def get_inspector_email(self, obj):
+        return obj.inspector.email
+
+    def get_role_display(self, obj):
+        return obj.get_role_display()
+
+    def get_zone_name(self, obj):
+        return obj.zone.name
+
+
 class InspectionZoneSerializer(serializers.ModelSerializer):
     head_inspector_name = serializers.SerializerMethodField()
-    inspectors_count = serializers.SerializerMethodField()
-    enterprises_count = serializers.SerializerMethodField()
+    inspectors_count    = serializers.SerializerMethodField()
+    enterprises_count   = serializers.SerializerMethodField()
+    communes_count      = serializers.SerializerMethodField()
 
     class Meta:
         model = InspectionZone
@@ -20,15 +56,22 @@ class InspectionZoneSerializer(serializers.ModelSerializer):
         return None
 
     def get_inspectors_count(self, obj):
-        return obj.inspectors.count()
+        return obj.inspector_assignments.filter(is_active=True).count()
 
     def get_enterprises_count(self, obj):
-        return obj.enterprises.count()
+        try:
+            return obj.enterprises.count()
+        except Exception:
+            return 0
+
+    def get_communes_count(self, obj):
+        return obj.communes.filter(is_active=True).count()
 
 
 class InspectionZoneDetailSerializer(serializers.ModelSerializer):
-    head_inspector = UserDetailSerializer(read_only=True)
-    inspectors = UserDetailSerializer(many=True, read_only=True)
+    head_inspector  = UserDetailSerializer(read_only=True)
+    communes        = CommuneSerializer(many=True, read_only=True)
+    inspector_assignments = InspectorZoneAssignmentSerializer(many=True, read_only=True)
 
     class Meta:
         model = InspectionZone

@@ -67,24 +67,22 @@ def _run_transcription(complaint_id: int) -> None:
 
         if lang_key not in ('FRENCH', '') and original_text:
             response = client.chat.completions.create(
-                model='gpt-3.5-turbo',
-                temperature=0.2,
-                max_tokens=1200,
+                model='gpt-4o-mini',
+                temperature=0.1,
+                max_tokens=600,
                 messages=[
                     {
                         'role': 'system',
                         'content': (
                             'Tu es un traducteur expert en langues ivoiriennes (Dioula, Baoulé, Bété, '
-                            'Sénoufo, Anyin) vers le français. Traduis fidèlement le message suivant en '
-                            'français courant. Ne rajoute aucun commentaire ni note, seulement la traduction. '
-                            'Si certains mots restent incompréhensibles, laisse-les entre crochets [mot].'
+                            'Sénoufo, Anyin) vers le français. Traduis fidèlement en français courant. '
+                            'Réponds uniquement avec la traduction, sans commentaire. '
+                            'Les mots incompréhensibles restent entre crochets [mot].'
                         ),
                     },
                     {
                         'role': 'user',
-                        'content': (
-                            f'Message en {lang_display} :\n\n{original_text}'
-                        ),
+                        'content': f'Message en {lang_display} :\n\n{original_text}',
                     },
                 ],
             )
