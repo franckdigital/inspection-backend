@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from .models import (
     DomesticWorker, DomesticEmployer, DomesticContract,
-    TimeTracking, MonthlyPayslip, LeaveRequest, VoiceComplaint, OvertimeSession
+    TimeTracking, MonthlyPayslip, LeaveRequest, VoiceComplaint, OvertimeSession,
+    FieldVisit,
 )
 from decimal import Decimal
 
@@ -38,6 +39,7 @@ class DomesticContractSerializer(serializers.ModelSerializer):
     worker_name = serializers.SerializerMethodField()
     employer_name = serializers.SerializerMethodField()
     inspector_name = serializers.SerializerMethodField()
+    inspector_phone = serializers.SerializerMethodField()
     is_fully_signed = serializers.SerializerMethodField()
 
     class Meta:
@@ -54,6 +56,11 @@ class DomesticContractSerializer(serializers.ModelSerializer):
     def get_inspector_name(self, obj):
         if obj.inspector:
             return obj.inspector.get_full_name()
+        return None
+
+    def get_inspector_phone(self, obj):
+        if obj.inspector and obj.inspector.phone_number:
+            return str(obj.inspector.phone_number)
         return None
 
     def get_is_fully_signed(self, obj):
@@ -221,3 +228,40 @@ class OvertimeSessionSerializer(serializers.ModelSerializer):
 class InspectorRespondSerializer(serializers.Serializer):
     response_text = serializers.CharField(required=False, allow_blank=True)
     response_audio = serializers.FileField(required=False)
+
+
+class FieldVisitSerializer(serializers.ModelSerializer):
+    inspector_name   = serializers.SerializerMethodField()
+    worker_name      = serializers.SerializerMethodField()
+    employer_name    = serializers.SerializerMethodField()
+    worker_id        = serializers.SerializerMethodField()
+    status_display   = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = FieldVisit
+        fields = '__all__'
+        read_only_fields = ('inspector', 'actual_date', 'created_at', 'updated_at')
+
+    def get_inspector_name(self, obj):
+        return obj.inspector.get_full_name()
+
+    def get_worker_name(self, obj):
+        return obj.contract.worker.user.get_full_name() if obj.contract else None
+
+    def get_employer_name(self, obj):
+        return obj.contract.employer.user.get_full_name() if obj.contract else None
+
+    def get_worker_id(self, obj):
+        return obj.contract.worker.id if obj.contract else None
+
+    def get_status_display(self, obj):
+        return obj.get_status_display()
+
+
+class RecordGPSSerializer(serializers.Serializer):
+    latitude  = serializers.DecimalField(max_digits=9, decimal_places=6)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    address   = serializers.CharField(required=False, allow_blank=True)
+    status    = serializers.ChoiceField(
+        choices=['IN_PROGRESS', 'COMPLETED'], default='IN_PROGRESS'
+    )

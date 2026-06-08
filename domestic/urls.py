@@ -3,7 +3,7 @@ from rest_framework.routers import SimpleRouter
 from .views import (
     DomesticWorkerViewSet, DomesticEmployerViewSet, DomesticContractViewSet,
     TimeTrackingViewSet, MonthlyPayslipViewSet, LeaveRequestViewSet,
-    OvertimeSessionViewSet, VoiceComplaintViewSet,
+    OvertimeSessionViewSet, VoiceComplaintViewSet, FieldVisitViewSet,
 )
 
 app_name = 'domestic'
@@ -17,5 +17,6 @@ router.register(r'payslips', MonthlyPayslipViewSet, basename='payslip')
 router.register(r'leaves', LeaveRequestViewSet, basename='leave')
 router.register(r'overtime', OvertimeSessionViewSet, basename='overtime')
 router.register(r'voice-complaints', VoiceComplaintViewSet, basename='voice-complaint')
+router.register(r'field-visits', FieldVisitViewSet, basename='field-visit')
 
 urlpatterns = router.urls

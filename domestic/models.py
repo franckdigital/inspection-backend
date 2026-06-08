@@ -600,3 +600,59 @@ class VoiceComplaint(models.Model):
 
     def __str__(self):
         return f"{self.case_number} - {self.worker.user.get_full_name()}"
+
+
+class FieldVisit(models.Model):
+    """Visite de terrain d'un inspecteur chez un employé de maison"""
+
+    STATUS_CHOICES = (
+        ('PLANNED',     'Planifiée'),
+        ('IN_PROGRESS', 'En cours'),
+        ('COMPLETED',   'Terminée'),
+        ('CANCELLED',   'Annulée'),
+    )
+
+    inspector = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='field_visits',
+        verbose_name='Inspecteur'
+    )
+    contract = models.ForeignKey(
+        DomesticContract,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='field_visits',
+        verbose_name='Contrat lié'
+    )
+
+    zone_label = models.CharField(max_length=200, blank=True, verbose_name='Zone / Quartier')
+    commune    = models.CharField(max_length=100, blank=True, verbose_name='Commune')
+
+    planned_date = models.DateTimeField(verbose_name='Date prévue')
+    actual_date  = models.DateTimeField(null=True, blank=True, verbose_name='Date effective')
+
+    # GPS enregistré lors de la visite
+    latitude  = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    address   = models.CharField(max_length=500, blank=True, verbose_name='Adresse de visite')
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PLANNED', verbose_name='Statut')
+
+    worker_present   = models.BooleanField(default=True,  verbose_name='Employé présent')
+    employer_present = models.BooleanField(default=False, verbose_name='Employeur présent')
+    notes    = models.TextField(blank=True, verbose_name='Notes')
+    findings = models.TextField(blank=True, verbose_name='Constats')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Visite de terrain'
+        verbose_name_plural = 'Visites de terrain'
+        ordering = ['-planned_date']
+
+    def __str__(self):
+        name = self.contract.worker.user.get_full_name() if self.contract else '—'
+        return f"Visite {name} — {self.planned_date.date()}"

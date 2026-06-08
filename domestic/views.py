@@ -10,7 +10,8 @@ from math import radians, cos, sin, asin, sqrt
 
 from .models import (
     DomesticWorker, DomesticEmployer, DomesticContract,
-    TimeTracking, MonthlyPayslip, LeaveRequest, VoiceComplaint, OvertimeSession
+    TimeTracking, MonthlyPayslip, LeaveRequest, VoiceComplaint, OvertimeSession,
+    FieldVisit,
 )
 from .serializers import (
     DomesticWorkerSerializer, DomesticEmployerSerializer,
@@ -20,6 +21,7 @@ from .serializers import (
     LeaveRequestSerializer, ApproveRejectLeaveSerializer,
     VoiceComplaintSerializer, VoiceComplaintCreateSerializer,
     InspectorRespondSerializer, OvertimeSessionSerializer,
+    FieldVisitSerializer, RecordGPSSerializer,
 )
 
 # ── Constantes RG-DOM ─────────────────────────────────────────────────────────
@@ -502,6 +504,76 @@ class TimeTrackingViewSet(viewsets.ModelViewSet):
             'alerts': alerts,
         })
 
+    @action(detail=False, methods=['get'], url_path='address-book')
+    def address_book(self, request):
+        """
+        Carnet d'adresses des employés supervisés par l'inspecteur.
+        Retourne la dernière position GPS connue (dernier pointage) pour chaque employé,
+        groupée par commune / zone géographique.
+        """
+        user = request.user
+        if not is_admin_or_inspector(user):
+            return Response({'error': 'Accès réservé aux inspecteurs'}, status=status.HTTP_403_FORBIDDEN)
+
+        if user.user_type == 'ADMIN':
+            contracts = DomesticContract.objects.filter(status='ACTIVE').select_related(
+                'worker__user', 'employer', 'inspector'
+            )
+        else:
+            contracts = DomesticContract.objects.filter(
+                inspector=user, status='ACTIVE'
+            ).select_related('worker__user', 'employer')
+
+        from inspections.models import InspectionZone
+
+        result = []
+        for contract in contracts:
+            latest = (
+                TimeTracking.objects
+                .filter(contract=contract)
+                .order_by('-check_in_time')
+                .first()
+            )
+            total = TimeTracking.objects.filter(contract=contract).count()
+
+            # Commune : extraite de l'adresse ou ville de l'employeur
+            commune = ''
+            if latest and latest.check_in_address:
+                parts = [p.strip() for p in latest.check_in_address.split(',')]
+                commune = parts[-1] if parts else ''
+            if not commune:
+                commune = contract.employer.city or ''
+
+            # Zone d'inspection correspondante
+            zone_name = ''
+            if commune:
+                zone = InspectionZone.objects.filter(
+                    city__icontains=commune, is_active=True
+                ).first()
+                if zone:
+                    zone_name = zone.name
+
+            result.append({
+                'worker_id':            contract.worker.id,
+                'worker_name':          contract.worker.user.get_full_name(),
+                'specialization':       contract.worker.specialization,
+                'specialization_display': contract.worker.get_specialization_display(),
+                'contract_id':          contract.id,
+                'employer_name':        contract.employer.user.get_full_name(),
+                'employer_address':     contract.employer.address,
+                'commune':              commune,
+                'zone_name':            zone_name,
+                'last_checkin_date':    latest.date.isoformat() if latest else None,
+                'last_checkin_time':    latest.check_in_time.isoformat() if latest else None,
+                'last_address':         latest.check_in_address if latest else '',
+                'latitude':  float(latest.check_in_latitude)  if latest and latest.check_in_latitude  else None,
+                'longitude': float(latest.check_in_longitude) if latest and latest.check_in_longitude else None,
+                'total_checkins':       total,
+            })
+
+        result.sort(key=lambda x: (x['commune'] or 'zzz', x['worker_name']))
+        return Response(result)
+
 
 # ── Payslips ──────────────────────────────────────────────────────────────────
 
@@ -779,3 +851,61 @@ class VoiceComplaintViewSet(viewsets.ModelViewSet):
         vc.status = 'ASSISTANCE_REQUESTED'
         vc.save()
         return Response({'detail': 'Demande d\'assistance linguistique envoyée.'})
+
+
+# ── Visites de terrain ────────────────────────────────────────────────────────
+
+class FieldVisitViewSet(viewsets.ModelViewSet):
+    serializer_class   = FieldVisitSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends    = [DjangoFilterBackend]
+    filterset_fields   = ['status', 'commune', 'contract']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.user_type == 'ADMIN':
+            return FieldVisit.objects.all().select_related(
+                'inspector', 'contract__worker__user', 'contract__employer__user'
+            )
+        if is_admin_or_inspector(user):
+            return FieldVisit.objects.filter(inspector=user).select_related(
+                'inspector', 'contract__worker__user', 'contract__employer__user'
+            )
+        return FieldVisit.objects.none()
+
+    def perform_create(self, serializer):
+        serializer.save(inspector=self.request.user)
+
+    @action(detail=True, methods=['post'], url_path='record-gps')
+    def record_gps(self, request, pk=None):
+        """Enregistre la position GPS de l'inspecteur au moment de la visite."""
+        visit = self.get_object()
+        s = RecordGPSSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+
+        visit.latitude  = d['latitude']
+        visit.longitude = d['longitude']
+        visit.address   = d.get('address', '')
+        visit.status    = d['status']
+        visit.actual_date = timezone.now()
+        visit.save()
+        return Response(FieldVisitSerializer(visit).data)
+
+    @action(detail=False, methods=['get'], url_path='by-zone')
+    def by_zone(self, request):
+        """Retourne les visites regroupées par commune/zone."""
+        user = request.user
+        if not is_admin_or_inspector(user):
+            return Response({'error': 'Accès réservé aux inspecteurs'}, status=status.HTTP_403_FORBIDDEN)
+
+        qs = self.get_queryset()
+        grouped: dict = {}
+        for visit in qs:
+            key = visit.commune or visit.zone_label or 'Non définie'
+            grouped.setdefault(key, []).append(FieldVisitSerializer(visit).data)
+
+        return Response([
+            {'zone': k, 'count': len(v), 'visits': v}
+            for k, v in sorted(grouped.items())
+        ])
