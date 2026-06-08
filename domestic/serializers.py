@@ -8,19 +8,38 @@ from decimal import Decimal
 
 
 class DomesticWorkerSerializer(serializers.ModelSerializer):
-    user_name = serializers.SerializerMethodField()
-    user_email = serializers.SerializerMethodField()
+    user_name              = serializers.SerializerMethodField()
+    user_email             = serializers.SerializerMethodField()
+    user_city              = serializers.SerializerMethodField()
+    user_phone             = serializers.SerializerMethodField()
+    assigned_inspector_name = serializers.SerializerMethodField()
+    active_contracts_count  = serializers.SerializerMethodField()
 
     class Meta:
         model = DomesticWorker
         fields = '__all__'
-        read_only_fields = ('created_at', 'updated_at')
+        read_only_fields = ('created_at', 'updated_at', 'assigned_inspector')
 
     def get_user_name(self, obj):
         return obj.user.get_full_name()
 
     def get_user_email(self, obj):
         return obj.user.email
+
+    def get_user_city(self, obj):
+        return getattr(obj.user, 'city', '') or ''
+
+    def get_user_phone(self, obj):
+        phone = getattr(obj.user, 'phone_number', None)
+        return str(phone) if phone else ''
+
+    def get_assigned_inspector_name(self, obj):
+        if obj.assigned_inspector:
+            return obj.assigned_inspector.get_full_name()
+        return None
+
+    def get_active_contracts_count(self, obj):
+        return obj.contracts.filter(status='ACTIVE').count()
 
 
 class DomesticEmployerSerializer(serializers.ModelSerializer):
@@ -36,11 +55,13 @@ class DomesticEmployerSerializer(serializers.ModelSerializer):
 
 
 class DomesticContractSerializer(serializers.ModelSerializer):
-    worker_name = serializers.SerializerMethodField()
-    employer_name = serializers.SerializerMethodField()
-    inspector_name = serializers.SerializerMethodField()
+    worker_name     = serializers.SerializerMethodField()
+    employer_name   = serializers.SerializerMethodField()
+    inspector_name  = serializers.SerializerMethodField()
     inspector_phone = serializers.SerializerMethodField()
     is_fully_signed = serializers.SerializerMethodField()
+    worker_city     = serializers.SerializerMethodField()
+    employer_city   = serializers.SerializerMethodField()
 
     class Meta:
         model = DomesticContract
@@ -65,6 +86,15 @@ class DomesticContractSerializer(serializers.ModelSerializer):
 
     def get_is_fully_signed(self, obj):
         return obj.is_fully_signed()
+
+    def get_worker_city(self, obj):
+        return getattr(obj.worker.user, 'city', '') or ''
+
+    def get_employer_city(self, obj):
+        try:
+            return getattr(obj.employer.user, 'city', '') or getattr(obj.employer, 'city', '') or ''
+        except Exception:
+            return ''
 
 
 class SignContractSerializer(serializers.Serializer):

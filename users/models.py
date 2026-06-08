@@ -134,6 +134,16 @@ class EmployeeProfile(models.Model):
 
     employment_contract = models.FileField(upload_to='contracts/', null=True, blank=True, verbose_name='Contrat de travail')
 
+    # Inspecteur assigné — indépendant de tout contrat
+    assigned_inspector = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='supervised_employees',
+        verbose_name='Inspecteur assigné',
+        limit_choices_to={'user_type__in': ['INSPECTEUR', 'CHEF_INSPECTION']},
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -48,41 +48,136 @@ def is_admin_or_inspector(user) -> bool:
     ]
 
 
+def _best_inspector_from_zone(zone):
+    """HEAD actif de la zone, sinon premier MEMBER, sinon head_inspector legacy."""
+    from inspections.models import InspectorZoneAssignment
+    head = InspectorZoneAssignment.objects.filter(
+        zone=zone, role='HEAD', is_active=True, inspector__is_active=True
+    ).select_related('inspector').first()
+    if head:
+        return head.inspector
+    member = InspectorZoneAssignment.objects.filter(
+        zone=zone, role='MEMBER', is_active=True, inspector__is_active=True
+    ).select_related('inspector').first()
+    if member:
+        return member.inspector
+    if zone.head_inspector and zone.head_inspector.is_active:
+        return zone.head_inspector
+    return None
+
+
+def _find_inspector_for_city(city: str):
+    """
+    Trouve l'inspecteur le plus compétent pour une ville/commune donnée.
+    Retourne l'inspecteur ou None (l'appelant gère le fallback ultime).
+    """
+    result, _ = _find_inspector_with_reason(city)
+    return result
+
+
+def _find_inspector_with_reason(city: str):
+    """
+    Même logique que _find_inspector_for_city, mais retourne aussi
+    la raison de correspondance (pour affichage dans le dashboard admin).
+
+    Retourne: (inspector | None, reason_str | None)
+    """
+    if not city:
+        return None, None
+
+    from inspections.models import Commune, InspectionZone
+
+    # 1. Commune.name correspond
+    commune = Commune.objects.filter(
+        name__icontains=city, is_active=True, zone__isnull=False
+    ).select_related('zone').first()
+    if commune and commune.zone:
+        inspector = _best_inspector_from_zone(commune.zone)
+        if inspector:
+            return inspector, f'Commune {commune.name} → {commune.zone.name}'
+
+    # 2. Commune.city correspond (ville du bureau)
+    commune_by_city = Commune.objects.filter(
+        city__icontains=city, is_active=True, zone__isnull=False
+    ).select_related('zone').first()
+    if commune_by_city and commune_by_city.zone:
+        inspector = _best_inspector_from_zone(commune_by_city.zone)
+        if inspector:
+            return inspector, f'Ville {city} → {commune_by_city.zone.name}'
+
+    # 3. Zone.city correspond (ancien mécanisme)
+    zone = InspectionZone.objects.filter(city__icontains=city, is_active=True).first()
+    if zone:
+        inspector = _best_inspector_from_zone(zone)
+        if inspector:
+            return inspector, f'Zone {zone.name}'
+
+    return None, None
+
+
 def _auto_assign_inspector(contract: DomesticContract) -> None:
     """
     Affecte l'inspecteur compétent à un contrat qui devient ACTIVE.
-    Priorité : chef de la zone → premier inspecteur actif.
+
+    Ordre de priorité :
+      1. Inspecteur déjà assigné au worker (worker.assigned_inspector)
+      2. Commune de résidence de l'employé (worker.user.city)
+         → Commune → InspectionZone → InspectorZoneAssignment HEAD puis MEMBER
+      3. Commune de l'employeur (employer.city) — lieu de travail
+      4. Fallback ultime : premier INSPECTEUR actif en base
+
+    Effet secondaire : propage l'inspecteur sur worker.assigned_inspector
+    si celui-ci n'en a pas encore.
     """
     if contract.inspector:
         return  # déjà assigné
 
-    from inspections.models import InspectionZone
     from users.models import User as UserModel
 
-    # Cherche la commune du worker (champ city sur l'utilisateur)
-    city = getattr(contract.worker.user, 'city', '') or ''
+    # 1. Inspecteur déjà assigné au worker directement
+    if contract.worker.assigned_inspector and contract.worker.assigned_inspector.is_active:
+        contract.inspector = contract.worker.assigned_inspector
+        return
 
-    if city:
-        zone = InspectionZone.objects.filter(city__icontains=city, is_active=True).first()
-        if zone and zone.head_inspector and zone.head_inspector.is_active:
-            contract.inspector = zone.head_inspector
-            return
+    # 2. Ville de résidence de l'employé
+    worker_city = getattr(contract.worker.user, 'city', '') or ''
+    inspector = _find_inspector_for_city(worker_city)
 
-    # Fallback : premier inspecteur actif en base
-    fallback = UserModel.objects.filter(user_type='INSPECTEUR', is_active=True).first()
-    if fallback:
-        contract.inspector = fallback
+    # 3. Ville de l'employeur (lieu de travail)
+    if not inspector:
+        try:
+            employer_city = getattr(contract.employer.user, 'city', '') or ''
+            if not employer_city:
+                employer_city = getattr(contract.employer, 'city', '') or ''
+        except Exception:
+            employer_city = ''
+        if employer_city and employer_city != worker_city:
+            inspector = _find_inspector_for_city(employer_city)
+
+    # 4. Fallback ultime
+    if not inspector:
+        inspector = UserModel.objects.filter(
+            user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+        ).first()
+
+    if inspector:
+        contract.inspector = inspector
+        # Propager aussi sur le worker si pas encore assigné
+        if not contract.worker.assigned_inspector:
+            contract.worker.assigned_inspector = inspector
+            contract.worker.save(update_fields=['assigned_inspector'])
 
 
 def _resolve_inspector_for_complaint(worker, commune: str):
     """
     Retourne l'inspecteur à affecter à une plainte vocale.
+
     Ordre de priorité :
-    1. L'inspecteur déjà lié au contrat actif du worker
-    2. Le chef de la zone couvrant la commune de la plainte
-    3. Premier inspecteur actif en base
+      1. Inspecteur déjà lié au contrat actif du worker
+      2. Commune de la plainte → InspectionZone → InspectorZoneAssignment HEAD/MEMBER
+      3. Ville de résidence du worker → même chaîne
+      4. Fallback ultime : premier INSPECTEUR actif
     """
-    from inspections.models import InspectionZone
     from users.models import User as UserModel
 
     # 1. Inspecteur du contrat actif
@@ -90,14 +185,22 @@ def _resolve_inspector_for_complaint(worker, commune: str):
     if active_contract and active_contract.inspector and active_contract.inspector.is_active:
         return active_contract.inspector
 
-    # 2. Chef de zone selon la commune
-    if commune:
-        zone = InspectionZone.objects.filter(city__icontains=commune, is_active=True).first()
-        if zone and zone.head_inspector and zone.head_inspector.is_active:
-            return zone.head_inspector
+    # 2. Commune déclarée dans la plainte
+    inspector = _find_inspector_for_city(commune or '')
+    if inspector:
+        return inspector
 
-    # 3. Fallback
-    return UserModel.objects.filter(user_type='INSPECTEUR', is_active=True).first()
+    # 3. Ville de résidence du worker
+    worker_city = getattr(worker.user, 'city', '') or ''
+    if worker_city and worker_city != (commune or ''):
+        inspector = _find_inspector_for_city(worker_city)
+        if inspector:
+            return inspector
+
+    # 4. Fallback
+    return UserModel.objects.filter(
+        user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+    ).first()
 
 
 # ── Workers ───────────────────────────────────────────────────────────────────
@@ -180,6 +283,135 @@ class DomesticWorkerViewSet(viewsets.ModelViewSet):
         workers = DomesticWorker.objects.filter(is_available=True)
         return Response(self.get_serializer(workers, many=True).data)
 
+    # ── Affectation inspecteur (sans contrat requis) ──────────────────────────
+
+    @action(detail=False, methods=['get'], url_path='unassigned')
+    def unassigned(self, request):
+        """
+        Liste des employés de maison sans inspecteur assigné,
+        enrichis de la suggestion automatique.
+        """
+        if not is_admin_or_inspector(request.user):
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+
+        workers = DomesticWorker.objects.filter(
+            assigned_inspector__isnull=True
+        ).select_related('user', 'assigned_inspector').prefetch_related('contracts')
+
+        data = DomesticWorkerSerializer(workers, many=True).data
+
+        for worker_obj, worker_data in zip(workers, data):
+            city = getattr(worker_obj.user, 'city', '') or ''
+            inspector, reason = _find_inspector_with_reason(city)
+            worker_data['suggested_inspector'] = {
+                'inspector_id':    inspector.id,
+                'inspector_name':  inspector.get_full_name(),
+                'inspector_email': inspector.email,
+                'match_reason':    reason,
+            } if inspector else None
+
+        return Response(data)
+
+    @action(detail=True, methods=['get'], url_path='suggest-inspector')
+    def suggest_inspector(self, request, pk=None):
+        """Retourne l'inspecteur suggéré pour ce worker (sans l'affecter)."""
+        if not is_admin_or_inspector(request.user):
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+        worker = self.get_object()
+        city = getattr(worker.user, 'city', '') or ''
+        inspector, reason = _find_inspector_with_reason(city)
+        if not inspector:
+            from users.models import User as UserModel
+            inspector = UserModel.objects.filter(
+                user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+            ).first()
+            reason = 'Fallback — premier inspecteur disponible' if inspector else None
+        if not inspector:
+            return Response({'suggestion': None})
+        return Response({'suggestion': {
+            'inspector_id':    inspector.id,
+            'inspector_name':  inspector.get_full_name(),
+            'inspector_email': inspector.email,
+            'match_reason':    reason,
+        }})
+
+    @action(detail=True, methods=['post'], url_path='assign-inspector')
+    def assign_inspector(self, request, pk=None):
+        """
+        Affecte un inspecteur à un employé de maison.
+        Met également à jour tous ses contrats actifs.
+        """
+        if not is_admin_or_inspector(request.user):
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+        worker = self.get_object()
+        inspector_id = request.data.get('inspector_id')
+        if not inspector_id:
+            return Response({'detail': 'inspector_id requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        from users.models import User as UserModel
+        try:
+            inspector = UserModel.objects.get(
+                id=inspector_id, user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+            )
+        except UserModel.DoesNotExist:
+            return Response({'detail': 'Inspecteur introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        worker.assigned_inspector = inspector
+        worker.save(update_fields=['assigned_inspector'])
+
+        # Propager sur les contrats actifs sans inspecteur
+        updated_contracts = worker.contracts.filter(
+            status='ACTIVE', inspector__isnull=True
+        ).update(inspector=inspector)
+
+        return Response({
+            'message': f'Inspecteur {inspector.get_full_name()} assigné.',
+            'inspector_id':   inspector.id,
+            'inspector_name': inspector.get_full_name(),
+            'contracts_updated': updated_contracts,
+        })
+
+    @action(detail=False, methods=['post'], url_path='bulk-auto-assign')
+    def bulk_auto_assign(self, request):
+        """
+        Affecte automatiquement tous les employés de maison sans inspecteur
+        en utilisant la chaîne Commune → Zone → InspectorZoneAssignment.
+        """
+        if not is_admin_or_inspector(request.user):
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+        from users.models import User as UserModel
+
+        workers = DomesticWorker.objects.filter(
+            assigned_inspector__isnull=True
+        ).select_related('user')
+
+        assigned_count   = 0
+        unresolved_ids   = []
+
+        for worker in workers:
+            city = getattr(worker.user, 'city', '') or ''
+            inspector = _find_inspector_for_city(city)
+            if not inspector:
+                inspector = UserModel.objects.filter(
+                    user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+                ).first()
+            if inspector:
+                worker.assigned_inspector = inspector
+                worker.save(update_fields=['assigned_inspector'])
+                # Propager sur les contrats actifs sans inspecteur
+                worker.contracts.filter(status='ACTIVE', inspector__isnull=True).update(inspector=inspector)
+                assigned_count += 1
+            else:
+                unresolved_ids.append(worker.id)
+
+        return Response({
+            'assigned':   assigned_count,
+            'unresolved': len(unresolved_ids),
+            'message': (
+                f'{assigned_count} employé(s) affecté(s) automatiquement.'
+                + (f' {len(unresolved_ids)} sans correspondance.' if unresolved_ids else '')
+            ),
+        })
+
 
 # ── Employers ─────────────────────────────────────────────────────────────────
 
@@ -228,12 +460,26 @@ class DomesticContractViewSet(viewsets.ModelViewSet):
     filterset_fields = ['status', 'worker', 'employer']
 
     def perform_create(self, serializer):
-        """Auto-assigne l'employer à partir de l'utilisateur connecté."""
+        """
+        Auto-assigne l'employeur si connecté en tant qu'EMPLOYEUR.
+        Hérite de l'inspecteur du worker si déjà assigné (sans contrat requis).
+        """
+        extra = {}
         if self.request.user.user_type == 'EMPLOYEUR':
-            employer = DomesticEmployer.objects.get(user=self.request.user)
-            serializer.save(employer=employer)
-        else:
-            serializer.save()
+            extra['employer'] = DomesticEmployer.objects.get(user=self.request.user)
+
+        contract = serializer.save(**extra)
+
+        # Hériter l'inspecteur du worker si disponible
+        if not contract.inspector:
+            worker_id = contract.worker_id
+            try:
+                worker = DomesticWorker.objects.select_related('assigned_inspector').get(id=worker_id)
+                if worker.assigned_inspector and worker.assigned_inspector.is_active:
+                    contract.inspector = worker.assigned_inspector
+                    contract.save(update_fields=['inspector'])
+            except DomesticWorker.DoesNotExist:
+                pass
 
     def get_queryset(self):
         user = self.request.user
@@ -317,15 +563,127 @@ class DomesticContractViewSet(viewsets.ModelViewSet):
             'inspector_id': inspector.id,
         })
 
-    @action(detail=False, methods=['get'], url_path='unassigned')
-    def unassigned(self, request):
-        """Liste des contrats actifs sans inspecteur assigné."""
+    @action(detail=True, methods=['get'], url_path='suggest-inspector')
+    def suggest_inspector(self, request, pk=None):
+        """
+        Retourne l'inspecteur suggéré pour un contrat (sans l'affecter).
+        Utile pour afficher une suggestion dans le dashboard admin.
+        """
         if request.user.user_type not in ('ADMIN', 'CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL'):
             return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+        contract = self.get_object()
+
+        worker_city = getattr(contract.worker.user, 'city', '') or ''
+        inspector, reason = _find_inspector_with_reason(worker_city)
+
+        if not inspector:
+            try:
+                employer_city = getattr(contract.employer.user, 'city', '') or getattr(contract.employer, 'city', '') or ''
+            except Exception:
+                employer_city = ''
+            if employer_city and employer_city != worker_city:
+                inspector, reason = _find_inspector_with_reason(employer_city)
+                if inspector and reason:
+                    reason = f'{reason} (lieu de travail)'
+
+        if not inspector:
+            from users.models import User as UserModel
+            inspector = UserModel.objects.filter(
+                user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+            ).first()
+            reason = 'Fallback — premier inspecteur disponible' if inspector else None
+
+        if not inspector:
+            return Response({'suggestion': None})
+
+        return Response({
+            'suggestion': {
+                'inspector_id':   inspector.id,
+                'inspector_name': inspector.get_full_name(),
+                'inspector_email': inspector.email,
+                'match_reason':   reason,
+            }
+        })
+
+    @action(detail=False, methods=['post'], url_path='bulk-auto-assign')
+    def bulk_auto_assign(self, request):
+        """
+        Affecte automatiquement tous les contrats actifs sans inspecteur
+        en utilisant la chaîne Commune → Zone → InspectorZoneAssignment.
+        Retourne le nombre de contrats affectés et ceux sans correspondance.
+        """
+        if request.user.user_type not in ('ADMIN', 'CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL'):
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+
         contracts = DomesticContract.objects.filter(
             status='ACTIVE', inspector__isnull=True
-        ).select_related('worker__user', 'employer__user')
-        return Response(DomesticContractSerializer(contracts, many=True).data)
+        ).select_related('worker__user', 'employer__user', 'employer')
+
+        assigned_count   = 0
+        unresolved_ids   = []
+
+        for contract in contracts:
+            _auto_assign_inspector(contract)
+            if contract.inspector:
+                contract.save(update_fields=['inspector'])
+                assigned_count += 1
+            else:
+                unresolved_ids.append(contract.id)
+
+        return Response({
+            'assigned':   assigned_count,
+            'unresolved': len(unresolved_ids),
+            'unresolved_contract_ids': unresolved_ids,
+            'message': (
+                f'{assigned_count} contrat(s) affecté(s) automatiquement.'
+                + (f' {len(unresolved_ids)} contrat(s) sans inspecteur trouvé.' if unresolved_ids else '')
+            ),
+        })
+
+    @action(detail=False, methods=['get'], url_path='unassigned')
+    def unassigned(self, request):
+        """
+        Liste des contrats actifs sans inspecteur, enrichis de la suggestion
+        automatique (inspector suggéré + raison de correspondance).
+        """
+        if request.user.user_type not in ('ADMIN', 'CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL'):
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+
+        contracts = DomesticContract.objects.filter(
+            status='ACTIVE', inspector__isnull=True
+        ).select_related('worker__user', 'employer__user', 'employer')
+
+        data = DomesticContractSerializer(contracts, many=True).data
+
+        # Enrichit chaque contrat avec la suggestion automatique
+        for contract_obj, contract_data in zip(contracts, data):
+            worker_city = getattr(contract_obj.worker.user, 'city', '') or ''
+            inspector, reason = _find_inspector_with_reason(worker_city)
+
+            if not inspector:
+                try:
+                    employer_city = (
+                        getattr(contract_obj.employer.user, 'city', '')
+                        or getattr(contract_obj.employer, 'city', '') or ''
+                    )
+                except Exception:
+                    employer_city = ''
+                if employer_city and employer_city != worker_city:
+                    inspector, reason = _find_inspector_with_reason(employer_city)
+                    if inspector and reason:
+                        reason = f'{reason} (lieu de travail)'
+
+            if inspector:
+                contract_data['suggested_inspector'] = {
+                    'inspector_id':    inspector.id,
+                    'inspector_name':  inspector.get_full_name(),
+                    'inspector_email': inspector.email,
+                    'match_reason':    reason,
+                }
+            else:
+                contract_data['suggested_inspector'] = None
+
+        return Response(data)
 
 
 # ── Time Tracking (Pointage) ──────────────────────────────────────────────────

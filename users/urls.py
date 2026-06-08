@@ -4,7 +4,8 @@ from .views import (
     RegisterView, CustomTokenObtainPairView, UserDetailView,
     ChangePasswordView, PasswordResetRequestView, PasswordResetConfirmView,
     EmailVerificationView, SetupOTPView, DisableOTPView, VerifyOTPView,
-    EmployeeProfileView, InspectorProfileView, EmployerProfileView
+    EmployeeProfileView, InspectorProfileView, EmployerProfileView,
+    EmployeeInspectorAssignView,
 )
 
 app_name = 'users'
@@ -35,4 +36,9 @@ urlpatterns = [
     path('profile/employee/', EmployeeProfileView.as_view(), name='employee_profile'),
     path('profile/inspector/', InspectorProfileView.as_view(), name='inspector_profile'),
     path('profile/employer/', EmployerProfileView.as_view(), name='employer_profile'),
+
+    # Admin — affectation inspecteur aux salariés (sans contrat)
+    path('employees/unassigned/', EmployeeInspectorAssignView.as_view(), name='employees_unassigned'),
+    path('employees/<int:employee_id>/assign-inspector/', EmployeeInspectorAssignView.as_view(), name='employee_assign_inspector'),
+    path('employees/bulk-auto-assign/', EmployeeInspectorAssignView.as_view(), name='employees_bulk_assign'),
 ]

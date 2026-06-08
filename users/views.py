@@ -383,3 +383,168 @@ class EmployerProfileView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         obj, created = EmployerProfile.objects.get_or_create(user=self.request.user)
         return obj
+
+
+# ── Admin : affectation inspecteur aux salariés (sans contrat requis) ──────────
+
+class EmployeeInspectorAssignView(APIView):
+    """
+    Admin uniquement.
+    GET  /users/employees/unassigned/   → salariés sans inspecteur + suggestion
+    POST /users/employees/{id}/assign-inspector/ → affecter un inspecteur
+    POST /users/employees/bulk-auto-assign/      → auto-affecter tous
+    """
+    permission_classes = (permissions.IsAuthenticated,)
+
+    ADMIN_TYPES = ('ADMIN', 'CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL')
+
+    def _check_admin(self, request):
+        if request.user.user_type not in self.ADMIN_TYPES:
+            return Response({'detail': 'Accès réservé.'}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
+    def _find_inspector_for_city(self, city: str):
+        """Même chaîne de résolution que dans domestic/views.py."""
+        if not city:
+            return None, None
+        from inspections.models import Commune, InspectionZone, InspectorZoneAssignment
+
+        def _best(zone):
+            head = InspectorZoneAssignment.objects.filter(
+                zone=zone, role='HEAD', is_active=True, inspector__is_active=True
+            ).select_related('inspector').first()
+            if head:
+                return head.inspector
+            member = InspectorZoneAssignment.objects.filter(
+                zone=zone, role='MEMBER', is_active=True, inspector__is_active=True
+            ).select_related('inspector').first()
+            if member:
+                return member.inspector
+            if zone.head_inspector and zone.head_inspector.is_active:
+                return zone.head_inspector
+            return None
+
+        commune = Commune.objects.filter(name__icontains=city, is_active=True, zone__isnull=False).select_related('zone').first()
+        if commune and commune.zone:
+            insp = _best(commune.zone)
+            if insp:
+                return insp, f'Commune {commune.name} → {commune.zone.name}'
+
+        commune2 = Commune.objects.filter(city__icontains=city, is_active=True, zone__isnull=False).select_related('zone').first()
+        if commune2 and commune2.zone:
+            insp = _best(commune2.zone)
+            if insp:
+                return insp, f'Ville {city} → {commune2.zone.name}'
+
+        zone = InspectionZone.objects.filter(city__icontains=city, is_active=True).first()
+        if zone:
+            insp = _best(zone)
+            if insp:
+                return insp, f'Zone {zone.name}'
+
+        return None, None
+
+    def get(self, request):
+        """Liste des salariés (EMPLOYE) sans inspecteur assigné + suggestion."""
+        err = self._check_admin(request)
+        if err:
+            return err
+
+        profiles = EmployeeProfile.objects.filter(
+            assigned_inspector__isnull=True,
+            user__user_type='EMPLOYE',
+            user__is_active=True,
+        ).select_related('user', 'current_employer')
+
+        result = []
+        for p in profiles:
+            city = p.city or getattr(p.user, 'city', '') or ''
+            inspector, reason = self._find_inspector_for_city(city)
+            if not inspector:
+                inspector = User.objects.filter(
+                    user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+                ).first()
+                reason = 'Fallback' if inspector else None
+            result.append({
+                'profile_id':    p.id,
+                'user_id':       p.user.id,
+                'user_name':     p.user.get_full_name(),
+                'user_email':    p.user.email,
+                'user_city':     city,
+                'job_title':     p.job_title,
+                'employer_name': p.current_employer.name if p.current_employer else None,
+                'assigned_inspector':      None,
+                'assigned_inspector_name': None,
+                'suggested_inspector': {
+                    'inspector_id':    inspector.id,
+                    'inspector_name':  inspector.get_full_name(),
+                    'inspector_email': inspector.email,
+                    'match_reason':    reason,
+                } if inspector else None,
+            })
+
+        return Response(result)
+
+    def post(self, request, employee_id=None):
+        err = self._check_admin(request)
+        if err:
+            return err
+
+        # Bulk auto-assign
+        if request.path.rstrip('/').endswith('bulk-auto-assign'):
+            profiles = EmployeeProfile.objects.filter(
+                assigned_inspector__isnull=True,
+                user__user_type='EMPLOYE',
+                user__is_active=True,
+            ).select_related('user')
+
+            assigned = 0
+            unresolved = []
+            for p in profiles:
+                city = p.city or getattr(p.user, 'city', '') or ''
+                inspector, _ = self._find_inspector_for_city(city)
+                if not inspector:
+                    inspector = User.objects.filter(
+                        user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+                    ).first()
+                if inspector:
+                    p.assigned_inspector = inspector
+                    p.save(update_fields=['assigned_inspector'])
+                    assigned += 1
+                else:
+                    unresolved.append(p.id)
+
+            return Response({
+                'assigned': assigned,
+                'unresolved': len(unresolved),
+                'message': f'{assigned} salarié(s) affecté(s) automatiquement.',
+            })
+
+        # Single assign
+        if not employee_id:
+            return Response({'detail': 'employee_id requis.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            profile = EmployeeProfile.objects.get(id=employee_id)
+        except EmployeeProfile.DoesNotExist:
+            return Response({'detail': 'Profil introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        inspector_id = request.data.get('inspector_id')
+        if not inspector_id:
+            return Response({'detail': 'inspector_id requis.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            inspector = User.objects.get(
+                id=inspector_id, user_type__in=['INSPECTEUR', 'CHEF_INSPECTION'], is_active=True
+            )
+        except User.DoesNotExist:
+            return Response({'detail': 'Inspecteur introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        profile.assigned_inspector = inspector
+        profile.save(update_fields=['assigned_inspector'])
+
+        return Response({
+            'message': f'Inspecteur {inspector.get_full_name()} assigné.',
+            'inspector_id':   inspector.id,
+            'inspector_name': inspector.get_full_name(),
+        })

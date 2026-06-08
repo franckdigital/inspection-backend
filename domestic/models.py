@@ -57,6 +57,15 @@ class DomesticWorker(models.Model):
         help_text='["lundi", "mardi", etc.]'
     )
 
+    # Inspecteur assigné — indépendant de tout contrat
+    assigned_inspector = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='supervised_domestic_workers',
+        verbose_name='Inspecteur assigné',
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
