@@ -2,7 +2,7 @@
 
 API Django REST Framework pour la plateforme de gestion des inspections du travail.
 
-## Technologies
+## Technologies ok
 
 - **Framework**: Django 6.0.5
 - **API**: Django REST Framework 3.15.1
