@@ -1297,10 +1297,14 @@ class VoiceComplaintViewSet(viewsets.ModelViewSet):
         from django.db.models import Q
         user = self.request.user
         if is_admin_or_inspector(user):
-            if user.user_type in ('INSPECTEUR', 'CHEF_INSPECTION'):
+            if user.user_type == 'INSPECTEUR':
+                # Assignées à cet inspecteur + non encore assignées (à prendre en charge)
                 return VoiceComplaint.objects.filter(
-                    Q(assigned_inspector=user) | Q(assistance_inspector=user)
+                    Q(assigned_inspector=user) |
+                    Q(assistance_inspector=user) |
+                    Q(assigned_inspector__isnull=True)
                 )
+            # CHEF_INSPECTION, DIRECTEUR, ADMIN → tout voir
             return VoiceComplaint.objects.all()
         if user.user_type in ('EMPLOYE_MAISON', 'EMPLOYE'):
             try:

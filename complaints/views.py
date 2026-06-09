@@ -27,13 +27,19 @@ class ComplaintViewSet(viewsets.ModelViewSet):
         return ComplaintSerializer
 
     def get_queryset(self):
+        from django.db.models import Q
         user = self.request.user
         queryset = Complaint.objects.all()
 
         if user.user_type == 'EMPLOYE':
             queryset = queryset.filter(complainant=user)
+        elif user.user_type == 'EMPLOYE_MAISON':
+            queryset = queryset.filter(complainant=user)
         elif user.user_type == 'INSPECTEUR':
-            queryset = queryset.filter(assigned_to=user)
+            # Plaintes assignées + toutes les plaintes des employés de maison
+            queryset = queryset.filter(
+                Q(assigned_to=user) | Q(complainant__user_type='EMPLOYE_MAISON')
+            )
         elif user.user_type in ['CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL', 'ADMIN']:
             pass
         else:
