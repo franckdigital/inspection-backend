@@ -36,10 +36,8 @@ class ComplaintViewSet(viewsets.ModelViewSet):
         elif user.user_type == 'EMPLOYE_MAISON':
             queryset = queryset.filter(complainant=user)
         elif user.user_type == 'INSPECTEUR':
-            # Plaintes assignées + toutes les plaintes des employés de maison
-            queryset = queryset.filter(
-                Q(assigned_to=user) | Q(complainant__user_type='EMPLOYE_MAISON')
-            )
+            # Toutes les plaintes : assignées + non assignées + tous types d'employés
+            pass
         elif user.user_type in ['CHEF_INSPECTION', 'DIRECTEUR_REGIONAL', 'DIRECTEUR_GENERAL', 'ADMIN']:
             pass
         else:

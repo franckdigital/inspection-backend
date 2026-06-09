@@ -182,6 +182,8 @@ class Command(BaseCommand):
                 self._create_inspection_planning(enterprises, inspectors)
                 self._create_mediations(complaints + dom_complaints, inspectors)
                 self._create_judicial_procedures(complaints, inspectors)
+                meps_insp = self._create_inspecteur_meps(zones)
+                self._create_meps_employee_complaints(employees, enterprises, meps_insp)
             self.stdout.write(self.style.SUCCESS('\n✓ Seed terminé avec succès.'))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f'✗ Seed échoué : {e}'))
@@ -744,4 +746,77 @@ class Command(BaseCommand):
             self.stdout.write(
                 f'  créée → {complaint.complaint_number} [{ptype}] '
                 f'tribunal: {court} → officier: {officer.get_full_name()}'
+            )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # COMPTE DÉMO : inspecteur@meps.ci
+    # ──────────────────────────────────────────────────────────────────────────
+    def _create_inspecteur_meps(self, zones):
+        from users.models import User, InspectorProfile
+        self.stdout.write('\n[Compte démo inspecteur@meps.ci]')
+        user, created = User.objects.get_or_create(
+            email='inspecteur@meps.ci',
+            defaults=dict(
+                first_name='Kouassi', last_name='Inspecteur',
+                user_type='INSPECTEUR',
+                phone_number='+2250100999999',
+                gender='M', is_active=True, is_verified=True,
+            ),
+        )
+        if created:
+            user.set_password('Inspect@2024!')
+            user.save()
+        elif user.user_type != 'INSPECTEUR':
+            user.user_type = 'INSPECTEUR'
+            user.save(update_fields=['user_type'])
+        InspectorProfile.objects.get_or_create(
+            user=user,
+            defaults=dict(
+                badge_number='INSP-MEPS-2024-999',
+                inspection_zone=zones['DIOULA'],
+                specialization='Droit du travail — Inspection générale Abidjan',
+            ),
+        )
+        self.stdout.write(f'  {"créé" if created else "existant"} → {user.get_full_name()} ({user.email})')
+        return user
+
+    def _create_meps_employee_complaints(self, employees, enterprises, inspector):
+        from complaints.models import Complaint
+        self.stdout.write('\n[Plaintes salariés → inspecteur@meps.ci]')
+        meps_complaints = [
+            ('UNPAID_SALARY',      'Refus de paiement des heures supplémentaires',          'ASSIGNED',           'HIGH',   'Zone Industrielle de Yopougon, Lot 47',     '5.3556', '-4.0700'),
+            ('HARASSMENT',         'Harcèlement moral répété et menaces de licenciement',   'IN_PROGRESS',        'URGENT', 'Plateau, Immeuble Star 3',                  '5.3215', '-4.0183'),
+            ('TERMINATION',        'Licenciement sans préavis ni indemnité légale',          'UNDER_INVESTIGATION','HIGH',   'Avenue de la République, Quartier Commerce', '7.6833', '-5.0333'),
+            ('WORKING_CONDITIONS', "Absence d'équipements de sécurité sur chantier",        'PENDING',            'MEDIUM', 'Route de Vavoua, km 4',                     '6.8770', '-6.4502'),
+            ('OVERTIME',           'Dépassement systématique de la durée légale du travail', 'MEDIATION',          'MEDIUM', 'Zone Industrielle Vridi, Bâtiment B',       '5.2500', '-3.9700'),
+        ]
+        for idx, (ctype, subject, status, priority, addr, lat, lng) in enumerate(meps_complaints):
+            complainant = employees[idx % len(employees)]
+            enterprise  = enterprises[idx % len(enterprises)]
+            number = f'MEPS-PLT-2024-{300 + idx:03d}'
+            c, created = Complaint.objects.get_or_create(
+                complaint_number=number,
+                defaults=dict(
+                    complainant=complainant,
+                    complaint_type=ctype,
+                    subject=subject,
+                    description=(
+                        f'Plainte déposée par {complainant.get_full_name()} concernant : {subject}. '
+                        f'Faits survenus dans l\'entreprise {enterprise.name}. '
+                        f'Le plaignant sollicite une intervention urgente de l\'inspection du travail.'
+                    ),
+                    enterprise=enterprise,
+                    employer_name=enterprise.name,
+                    workplace_address=addr,
+                    workplace_latitude=lat,
+                    workplace_longitude=lng,
+                    incident_date=date.today() - timedelta(days=10 + idx * 5),
+                    status=status,
+                    priority=priority,
+                    assigned_to=inspector if status not in ('PENDING',) else None,
+                ),
+            )
+            self.stdout.write(
+                f'  {"créée" if created else "existante"} → {number} [{status}] '
+                f'{complainant.get_full_name()} → inspecteur@meps.ci'
             )
