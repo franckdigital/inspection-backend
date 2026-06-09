@@ -173,14 +173,19 @@ def _resolve_inspector_for_complaint(worker, commune: str):
     Retourne l'inspecteur à affecter à une plainte vocale.
 
     Ordre de priorité :
-      1. Inspecteur déjà lié au contrat actif du worker
-      2. Commune de la plainte → InspectionZone → InspectorZoneAssignment HEAD/MEMBER
-      3. Ville de résidence du worker → même chaîne
-      4. Fallback ultime : premier INSPECTEUR actif
+      1. Inspecteur directement assigné au worker
+      2. Inspecteur du contrat actif
+      3. Commune de la plainte → InspectionZone → InspectorZoneAssignment HEAD/MEMBER
+      4. Ville de résidence du worker → même chaîne
+      5. Fallback ultime : premier INSPECTEUR actif
     """
     from users.models import User as UserModel
 
-    # 1. Inspecteur du contrat actif
+    # 1. Inspecteur directement assigné au worker (sans contrat requis)
+    if worker.assigned_inspector and worker.assigned_inspector.is_active:
+        return worker.assigned_inspector
+
+    # 2. Inspecteur du contrat actif
     active_contract = worker.contracts.filter(status='ACTIVE').select_related('inspector').first()
     if active_contract and active_contract.inspector and active_contract.inspector.is_active:
         return active_contract.inspector
@@ -692,15 +697,18 @@ class TimeTrackingViewSet(viewsets.ModelViewSet):
     serializer_class = TimeTrackingSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['contract', 'date', 'is_validated']
+    filterset_fields = ['contract', 'worker', 'date', 'is_validated']
 
     def get_queryset(self):
+        from django.db.models import Q
         user = self.request.user
         if is_admin_or_inspector(user):
             return TimeTracking.objects.all()
         if user.user_type in ('EMPLOYE', 'EMPLOYE_MAISON'):
             worker_ids = DomesticWorker.objects.filter(user=user).values_list('id', flat=True)
-            return TimeTracking.objects.filter(contract__worker_id__in=worker_ids)
+            return TimeTracking.objects.filter(
+                Q(worker_id__in=worker_ids) | Q(contract__worker_id__in=worker_ids)
+            ).distinct()
         if user.user_type == 'EMPLOYEUR':
             employer_ids = DomesticEmployer.objects.filter(user=user).values_list('id', flat=True)
             return TimeTracking.objects.filter(contract__employer_id__in=employer_ids)
@@ -709,50 +717,73 @@ class TimeTrackingViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def checkin(self, request):
         """
-        Pointer l'arrivée avec validation géographique (RG-DOM-002, RG-DOM-003).
-        Rejeté si l'employé est hors de la zone autorisée (500 m autour du domicile).
+        Pointer l'arrivée. Accepte contract_id OU worker_id (contrat facultatif).
+        Géofencing activé seulement si un contrat avec adresse employeur est fourni.
         """
         serializer = CheckInSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            contract = DomesticContract.objects.get(id=serializer.validated_data['contract_id'])
-        except DomesticContract.DoesNotExist:
-            return Response({'error': 'Contrat introuvable'}, status=status.HTTP_404_NOT_FOUND)
+        contract_id = serializer.validated_data.get('contract_id')
+        worker_id   = serializer.validated_data.get('worker_id')
+
+        contract = None
+        worker   = None
+
+        if contract_id:
+            try:
+                contract = DomesticContract.objects.select_related('worker', 'employer').get(id=contract_id)
+                worker   = contract.worker
+            except DomesticContract.DoesNotExist:
+                return Response({'error': 'Contrat introuvable'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            try:
+                if worker_id:
+                    worker = DomesticWorker.objects.get(id=worker_id)
+                else:
+                    worker = DomesticWorker.objects.get(user=request.user)
+            except DomesticWorker.DoesNotExist:
+                return Response({'error': 'Employé introuvable'}, status=status.HTTP_404_NOT_FOUND)
 
         today = timezone.now().date()
 
-        # RG-DOM-003 : validation géofencing
-        employer = contract.employer
-        if employer.latitude and employer.longitude:
-            lat = serializer.validated_data['latitude']
-            lon = serializer.validated_data['longitude']
-            distance = haversine_meters(lat, lon, employer.latitude, employer.longitude)
-            if distance > GEOFENCE_RADIUS_METERS:
-                return Response({
-                    'error': (
-                        f'Vous êtes trop loin du lieu de travail ({distance:.0f} m). '
-                        f'Zone autorisée : {GEOFENCE_RADIUS_METERS} m.'
-                    ),
-                    'distance_meters': round(distance),
-                    'geofence_radius': GEOFENCE_RADIUS_METERS,
-                    'outside_zone': True,
-                }, status=status.HTTP_400_BAD_REQUEST)
+        # RG-DOM-003 : géofencing (seulement quand l'employeur a des coordonnées)
+        if contract:
+            employer = contract.employer
+            if employer.latitude and employer.longitude:
+                lat = serializer.validated_data['latitude']
+                lon = serializer.validated_data['longitude']
+                distance = haversine_meters(lat, lon, employer.latitude, employer.longitude)
+                if distance > GEOFENCE_RADIUS_METERS:
+                    return Response({
+                        'error': (
+                            f'Vous êtes trop loin du lieu de travail ({distance:.0f} m). '
+                            f'Zone autorisée : {GEOFENCE_RADIUS_METERS} m.'
+                        ),
+                        'distance_meters': round(distance),
+                        'geofence_radius': GEOFENCE_RADIUS_METERS,
+                        'outside_zone': True,
+                    }, status=status.HTTP_400_BAD_REQUEST)
 
-        existing = TimeTracking.objects.filter(contract=contract, date=today).first()
+        # Vérification doublon du jour
+        from django.db.models import Q
+        existing = TimeTracking.objects.filter(
+            Q(worker=worker) | (Q(contract=contract) if contract else Q()),
+            date=today,
+        ).first()
         if existing:
             return Response(
-                {'error': 'Pointage déjà effectué aujourd\'hui'},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': "Pointage déjà effectué aujourd'hui"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         tracking = TimeTracking.objects.create(
+            worker=worker,
             contract=contract,
             date=today,
             check_in_time=timezone.now(),
             check_in_latitude=serializer.validated_data['latitude'],
             check_in_longitude=serializer.validated_data['longitude'],
-            check_in_address=serializer.validated_data.get('address', '')
+            check_in_address=serializer.validated_data.get('address', ''),
         )
         return Response(TimeTrackingSerializer(tracking).data, status=status.HTTP_201_CREATED)
 
@@ -785,52 +816,75 @@ class TimeTrackingViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def monthly_summary(self, request):
         contract_id = request.query_params.get('contract_id')
-        month = request.query_params.get('month')
+        worker_id   = request.query_params.get('worker_id')
+        month       = request.query_params.get('month')
 
-        if not contract_id or not month:
-            return Response({'error': 'contract_id et month requis'}, status=status.HTTP_400_BAD_REQUEST)
+        if not month:
+            return Response({'error': 'month requis'}, status=status.HTTP_400_BAD_REQUEST)
+        if not contract_id and not worker_id:
+            return Response({'error': 'contract_id ou worker_id requis'}, status=status.HTTP_400_BAD_REQUEST)
 
         month_date = datetime.strptime(month, '%Y-%m-%d').date()
-        first_day = month_date.replace(day=1)
-        last_day = (first_day + relativedelta(months=1)) - relativedelta(days=1)
+        first_day  = month_date.replace(day=1)
+        last_day   = (first_day + relativedelta(months=1)) - relativedelta(days=1)
 
-        trackings = TimeTracking.objects.filter(
-            contract_id=contract_id,
-            date__gte=first_day,
-            date__lte=last_day
-        )
+        from django.db.models import Q
+        if contract_id:
+            trackings = TimeTracking.objects.filter(
+                Q(contract_id=contract_id) | Q(worker=DomesticContract.objects.filter(id=contract_id).values('worker').first()['worker'] if DomesticContract.objects.filter(id=contract_id).exists() else None),
+                date__gte=first_day, date__lte=last_day,
+            ).distinct()
+        else:
+            trackings = TimeTracking.objects.filter(
+                Q(worker_id=worker_id) | Q(contract__worker_id=worker_id),
+                date__gte=first_day, date__lte=last_day,
+            ).distinct()
 
-        total_hours = sum([t.hours_worked for t in trackings], Decimal('0'))
+        total_hours    = sum([t.hours_worked for t in trackings], Decimal('0'))
         total_overtime = sum([t.overtime_hours for t in trackings], Decimal('0'))
 
         return Response({
-            'month': month,
-            'total_days': trackings.count(),
-            'total_hours': float(total_hours),
+            'month':         month,
+            'total_days':    trackings.count(),
+            'total_hours':   float(total_hours),
             'total_overtime': float(total_overtime),
-            'trackings': TimeTrackingSerializer(trackings, many=True).data
+            'trackings':     TimeTrackingSerializer(trackings, many=True).data,
         })
 
     @action(detail=False, methods=['get'])
     def abuse_alerts(self, request):
         """
         Détection automatique d'abus (RG-DOM-005).
-        Analyse les 30 derniers jours pour le contrat donné.
+        Analyse les 30 derniers jours. Accepte contract_id ou worker_id.
         """
         contract_id = request.query_params.get('contract_id')
-        if not contract_id:
-            return Response({'error': 'contract_id requis'}, status=status.HTTP_400_BAD_REQUEST)
+        worker_id   = request.query_params.get('worker_id')
 
-        try:
-            contract = DomesticContract.objects.get(id=contract_id)
-        except DomesticContract.DoesNotExist:
-            return Response({'error': 'Contrat introuvable'}, status=status.HTTP_404_NOT_FOUND)
+        if not contract_id and not worker_id:
+            return Response({'error': 'contract_id ou worker_id requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        contract = None
+        worker   = None
+
+        if contract_id:
+            try:
+                contract = DomesticContract.objects.select_related('worker').get(id=contract_id)
+                worker   = contract.worker
+            except DomesticContract.DoesNotExist:
+                return Response({'error': 'Contrat introuvable'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            try:
+                worker = DomesticWorker.objects.get(id=worker_id)
+            except DomesticWorker.DoesNotExist:
+                return Response({'error': 'Employé introuvable'}, status=status.HTTP_404_NOT_FOUND)
 
         today = timezone.now().date()
         since = today - timedelta(days=30)
+        from django.db.models import Q
         trackings = list(TimeTracking.objects.filter(
-            contract=contract, date__gte=since, date__lte=today
-        ))
+            Q(worker=worker) | (Q(contract=contract) if contract else Q()),
+            date__gte=since, date__lte=today,
+        ).distinct())
 
         alerts = []
 
@@ -880,8 +934,8 @@ class TimeTrackingViewSet(viewsets.ModelViewSet):
                     ),
                 })
 
-        # Salaire inférieur au SMIG
-        if contract.salary < SMIG_CI_MONTHLY:
+        # Salaire inférieur au SMIG (seulement si contrat disponible)
+        if contract and contract.salary and contract.salary < SMIG_CI_MONTHLY:
             alerts.append({
                 'type': 'BELOW_MINIMUM_WAGE',
                 'severity': 'CRITICAL',
@@ -892,78 +946,89 @@ class TimeTrackingViewSet(viewsets.ModelViewSet):
             })
 
         return Response({
-            'contract_id': int(contract_id),
-            'period': {'from': str(since), 'to': str(today)},
+            'contract_id': int(contract_id) if contract_id else None,
+            'worker_id':   worker.id,
+            'period':      {'from': str(since), 'to': str(today)},
             'alert_count': len(alerts),
-            'alerts': alerts,
+            'alerts':      alerts,
         })
 
     @action(detail=False, methods=['get'], url_path='address-book')
     def address_book(self, request):
         """
-        Carnet d'adresses des employés supervisés par l'inspecteur.
-        Retourne la dernière position GPS connue (dernier pointage) pour chaque employé,
-        groupée par commune / zone géographique.
+        Carnet d'adresses : employés avec contrat actif + employés sans contrat
+        mais avec assigned_inspector. Groupé par commune / zone géographique.
         """
         user = request.user
         if not is_admin_or_inspector(user):
             return Response({'error': 'Accès réservé aux inspecteurs'}, status=status.HTTP_403_FORBIDDEN)
 
-        if user.user_type == 'ADMIN':
-            contracts = DomesticContract.objects.filter(status='ACTIVE').select_related(
-                'worker__user', 'employer', 'inspector'
-            )
-        else:
-            contracts = DomesticContract.objects.filter(
-                inspector=user, status='ACTIVE'
-            ).select_related('worker__user', 'employer')
-
+        from django.db.models import Q
         from inspections.models import InspectionZone
 
-        result = []
-        for contract in contracts:
-            latest = (
-                TimeTracking.objects
-                .filter(contract=contract)
-                .order_by('-check_in_time')
-                .first()
-            )
-            total = TimeTracking.objects.filter(contract=contract).count()
+        def _zone_for_commune(commune):
+            if not commune:
+                return ''
+            zone = InspectionZone.objects.filter(city__icontains=commune, is_active=True).first()
+            return zone.name if zone else ''
 
-            # Commune : extraite de l'adresse ou ville de l'employeur
+        def _entry_from_tracking(worker, contract, latest, total):
             commune = ''
             if latest and latest.check_in_address:
                 parts = [p.strip() for p in latest.check_in_address.split(',')]
                 commune = parts[-1] if parts else ''
             if not commune:
-                commune = contract.employer.city or ''
+                commune = (contract.employer.city if contract else '') or getattr(worker.user, 'city', '') or ''
+            return {
+                'worker_id':              worker.id,
+                'worker_name':            worker.user.get_full_name(),
+                'specialization':         worker.specialization,
+                'specialization_display': worker.get_specialization_display(),
+                'contract_id':            contract.id if contract else None,
+                'employer_name':          contract.employer.user.get_full_name() if contract else None,
+                'employer_address':       contract.employer.address if contract else '',
+                'commune':                commune,
+                'zone_name':              _zone_for_commune(commune),
+                'last_checkin_date':      latest.date.isoformat() if latest else None,
+                'last_checkin_time':      latest.check_in_time.isoformat() if latest else None,
+                'last_address':           latest.check_in_address if latest else '',
+                'latitude':               float(latest.check_in_latitude)  if latest and latest.check_in_latitude  else None,
+                'longitude':              float(latest.check_in_longitude) if latest and latest.check_in_longitude else None,
+                'total_checkins':         total,
+            }
 
-            # Zone d'inspection correspondante
-            zone_name = ''
-            if commune:
-                zone = InspectionZone.objects.filter(
-                    city__icontains=commune, is_active=True
-                ).first()
-                if zone:
-                    zone_name = zone.name
+        result      = []
+        seen_worker = set()
 
-            result.append({
-                'worker_id':            contract.worker.id,
-                'worker_name':          contract.worker.user.get_full_name(),
-                'specialization':       contract.worker.specialization,
-                'specialization_display': contract.worker.get_specialization_display(),
-                'contract_id':          contract.id,
-                'employer_name':        contract.employer.user.get_full_name(),
-                'employer_address':     contract.employer.address,
-                'commune':              commune,
-                'zone_name':            zone_name,
-                'last_checkin_date':    latest.date.isoformat() if latest else None,
-                'last_checkin_time':    latest.check_in_time.isoformat() if latest else None,
-                'last_address':         latest.check_in_address if latest else '',
-                'latitude':  float(latest.check_in_latitude)  if latest and latest.check_in_latitude  else None,
-                'longitude': float(latest.check_in_longitude) if latest and latest.check_in_longitude else None,
-                'total_checkins':       total,
-            })
+        # 1. Workers avec contrat actif
+        if user.user_type == 'ADMIN':
+            contracts = DomesticContract.objects.filter(status='ACTIVE').select_related('worker__user', 'employer', 'inspector')
+        else:
+            contracts = DomesticContract.objects.filter(inspector=user, status='ACTIVE').select_related('worker__user', 'employer')
+
+        for contract in contracts:
+            worker = contract.worker
+            seen_worker.add(worker.id)
+            latest = TimeTracking.objects.filter(
+                Q(worker=worker) | Q(contract=contract)
+            ).order_by('-check_in_time').first()
+            total = TimeTracking.objects.filter(Q(worker=worker) | Q(contract=contract)).distinct().count()
+            result.append(_entry_from_tracking(worker, contract, latest, total))
+
+        # 2. Workers sans contrat actif mais avec assigned_inspector
+        if user.user_type == 'ADMIN':
+            direct_workers = DomesticWorker.objects.filter(
+                assigned_inspector__isnull=False
+            ).exclude(id__in=seen_worker).select_related('user', 'assigned_inspector')
+        else:
+            direct_workers = DomesticWorker.objects.filter(
+                assigned_inspector=user
+            ).exclude(id__in=seen_worker).select_related('user')
+
+        for worker in direct_workers:
+            latest = TimeTracking.objects.filter(worker=worker).order_by('-check_in_time').first()
+            total  = TimeTracking.objects.filter(worker=worker).count()
+            result.append(_entry_from_tracking(worker, None, latest, total))
 
         result.sort(key=lambda x: (x['commune'] or 'zzz', x['worker_name']))
         return Response(result)
@@ -975,15 +1040,18 @@ class MonthlyPayslipViewSet(viewsets.ModelViewSet):
     serializer_class = MonthlyPayslipSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['contract', 'status', 'month']
+    filterset_fields = ['contract', 'worker', 'status', 'month']
 
     def get_queryset(self):
+        from django.db.models import Q
         user = self.request.user
         if is_admin_or_inspector(user):
             return MonthlyPayslip.objects.all()
         if user.user_type in ('EMPLOYE', 'EMPLOYE_MAISON'):
             worker_ids = DomesticWorker.objects.filter(user=user).values_list('id', flat=True)
-            return MonthlyPayslip.objects.filter(contract__worker_id__in=worker_ids)
+            return MonthlyPayslip.objects.filter(
+                Q(worker_id__in=worker_ids) | Q(contract__worker_id__in=worker_ids)
+            ).distinct()
         if user.user_type == 'EMPLOYEUR':
             employer_ids = DomesticEmployer.objects.filter(user=user).values_list('id', flat=True)
             return MonthlyPayslip.objects.filter(contract__employer_id__in=employer_ids)
@@ -994,52 +1062,90 @@ class MonthlyPayslipViewSet(viewsets.ModelViewSet):
         serializer = GeneratePayslipSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            contract = DomesticContract.objects.get(id=serializer.validated_data['contract_id'])
-        except DomesticContract.DoesNotExist:
-            return Response({'error': 'Contrat introuvable'}, status=status.HTTP_404_NOT_FOUND)
+        contract_id = serializer.validated_data.get('contract_id')
+        worker_id   = serializer.validated_data.get('worker_id')
+
+        contract = None
+        worker   = None
+
+        if contract_id:
+            try:
+                contract = DomesticContract.objects.select_related('worker').get(id=contract_id)
+                worker   = contract.worker
+            except DomesticContract.DoesNotExist:
+                return Response({'error': 'Contrat introuvable'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            try:
+                worker = DomesticWorker.objects.get(id=worker_id)
+            except DomesticWorker.DoesNotExist:
+                return Response({'error': 'Employé introuvable'}, status=status.HTTP_404_NOT_FOUND)
 
         month_date = serializer.validated_data['month']
-        first_day = month_date.replace(day=1)
-        last_day = (first_day + relativedelta(months=1)) - relativedelta(days=1)
+        first_day  = month_date.replace(day=1)
+        last_day   = (first_day + relativedelta(months=1)) - relativedelta(days=1)
 
-        trackings = TimeTracking.objects.filter(
-            contract=contract,
-            date__gte=first_day,
-            date__lte=last_day,
-            is_validated=True
-        )
+        from django.db.models import Q
+        if contract:
+            trackings = TimeTracking.objects.filter(
+                Q(contract=contract) | Q(worker=worker),
+                date__gte=first_day, date__lte=last_day, is_validated=True,
+            ).distinct()
+        else:
+            trackings = TimeTracking.objects.filter(
+                Q(worker=worker) | Q(contract__worker=worker),
+                date__gte=first_day, date__lte=last_day, is_validated=True,
+            ).distinct()
 
-        regular_hours = sum([t.hours_worked - t.overtime_hours for t in trackings], Decimal('0'))
+        regular_hours  = sum([t.hours_worked - t.overtime_hours for t in trackings], Decimal('0'))
         overtime_hours = sum([t.overtime_hours for t in trackings], Decimal('0'))
-        hourly_rate = contract.salary / Decimal('160')
+
+        if contract:
+            base_salary         = contract.salary
+            transport_allowance = contract.transportation_allowance
+        else:
+            base_salary         = serializer.validated_data.get('base_salary') or Decimal('0')
+            transport_allowance = Decimal('0')
+
+        hourly_rate   = base_salary / Decimal('160') if base_salary else Decimal('0')
         overtime_rate = hourly_rate * Decimal('1.5')
 
-        payslip, created = MonthlyPayslip.objects.get_or_create(
-            contract=contract,
-            month=first_day,
-            defaults={
-                'base_salary': contract.salary,
-                'transportation_allowance': contract.transportation_allowance,
-                'status': 'DRAFT',
-                'gross_pay': contract.salary,
-                'total_deductions': Decimal('0'),
-                'net_pay': contract.salary,
-            }
-        )
+        if contract:
+            payslip, created = MonthlyPayslip.objects.get_or_create(
+                contract=contract, worker=worker, month=first_day,
+                defaults={
+                    'base_salary':            base_salary,
+                    'transportation_allowance': transport_allowance,
+                    'status':            'DRAFT',
+                    'gross_pay':         base_salary,
+                    'total_deductions':  Decimal('0'),
+                    'net_pay':           base_salary,
+                },
+            )
+        else:
+            payslip, created = MonthlyPayslip.objects.get_or_create(
+                worker=worker, contract=None, month=first_day,
+                defaults={
+                    'base_salary':            base_salary,
+                    'transportation_allowance': transport_allowance,
+                    'status':            'DRAFT',
+                    'gross_pay':         base_salary,
+                    'total_deductions':  Decimal('0'),
+                    'net_pay':           base_salary,
+                },
+            )
 
-        payslip.regular_hours = regular_hours
+        payslip.regular_hours  = regular_hours
         payslip.overtime_hours = overtime_hours
-        payslip.overtime_pay = overtime_hours * overtime_rate
-        payslip.bonuses = serializer.validated_data.get('bonuses', Decimal('0'))
+        payslip.overtime_pay   = overtime_hours * overtime_rate
+        payslip.bonuses          = serializer.validated_data.get('bonuses', Decimal('0'))
         payslip.other_deductions = serializer.validated_data.get('other_deductions', Decimal('0'))
-        payslip.social_security = (payslip.base_salary + payslip.overtime_pay) * Decimal('0.025')
+        payslip.social_security  = (payslip.base_salary + payslip.overtime_pay) * Decimal('0.025')
         payslip.calculate_totals()
         payslip.status = 'GENERATED'
 
         return Response({
             'message': 'Bulletin généré',
-            'payslip': MonthlyPayslipSerializer(payslip).data
+            'payslip': MonthlyPayslipSerializer(payslip).data,
         }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
@@ -1058,19 +1164,35 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
     serializer_class = LeaveRequestSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['contract', 'status', 'leave_type']
+    filterset_fields = ['contract', 'worker', 'status', 'leave_type']
 
     def get_queryset(self):
+        from django.db.models import Q
         user = self.request.user
         if is_admin_or_inspector(user):
             return LeaveRequest.objects.all()
         if user.user_type in ('EMPLOYE', 'EMPLOYE_MAISON'):
             worker_ids = DomesticWorker.objects.filter(user=user).values_list('id', flat=True)
-            return LeaveRequest.objects.filter(contract__worker_id__in=worker_ids)
+            return LeaveRequest.objects.filter(
+                Q(worker_id__in=worker_ids) | Q(contract__worker_id__in=worker_ids)
+            ).distinct()
         if user.user_type == 'EMPLOYEUR':
             employer_ids = DomesticEmployer.objects.filter(user=user).values_list('id', flat=True)
             return LeaveRequest.objects.filter(contract__employer_id__in=employer_ids)
         return LeaveRequest.objects.none()
+
+    def perform_create(self, serializer):
+        """Auto-renseigne le worker depuis le contrat ou l'utilisateur connecté."""
+        contract = serializer.validated_data.get('contract')
+        worker   = serializer.validated_data.get('worker')
+        if not worker and not contract:
+            try:
+                worker = DomesticWorker.objects.get(user=self.request.user)
+            except DomesticWorker.DoesNotExist:
+                pass
+        if contract and not worker:
+            worker = contract.worker
+        serializer.save(worker=worker)
 
     @action(detail=True, methods=['post'])
     def approve_reject(self, request, pk=None):
@@ -1093,18 +1215,25 @@ class OvertimeSessionViewSet(viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def _get_today_tracking(self, user):
+        """
+        Retourne (worker, tracking, error).
+        Ne nécessite plus de contrat actif : cherche par worker directement.
+        """
         try:
             worker = DomesticWorker.objects.get(user=user)
-            contract = worker.contracts.filter(status='ACTIVE').first()
-            if not contract:
-                return None, None, 'Aucun contrat actif.'
-            today = timezone.now().date()
-            tracking = TimeTracking.objects.filter(contract=contract, date=today).first()
-            if not tracking:
-                return None, None, 'Aucun pointage d\'arrivée aujourd\'hui.'
-            return worker, tracking, None
         except DomesticWorker.DoesNotExist:
             return None, None, 'Profil introuvable.'
+
+        today    = timezone.now().date()
+        from django.db.models import Q
+        tracking = TimeTracking.objects.filter(
+            Q(worker=worker) | Q(contract__worker=worker),
+            date=today,
+        ).first()
+
+        if not tracking:
+            return None, None, "Aucun pointage d'arrivée aujourd'hui."
+        return worker, tracking, None
 
     def list(self, request):
         _, tracking, err = self._get_today_tracking(request.user)
@@ -1114,10 +1243,12 @@ class OvertimeSessionViewSet(viewsets.GenericViewSet):
         if date_str:
             try:
                 from datetime import date as date_cls
-                d = date_cls.fromisoformat(date_str)
+                from django.db.models import Q
+                d      = date_cls.fromisoformat(date_str)
                 worker = DomesticWorker.objects.get(user=request.user)
-                contract = worker.contracts.filter(status='ACTIVE').first()
-                tracking = TimeTracking.objects.filter(contract=contract, date=d).first()
+                tracking = TimeTracking.objects.filter(
+                    Q(worker=worker) | Q(contract__worker=worker), date=d
+                ).first()
                 if not tracking:
                     return Response([])
             except Exception:
@@ -1304,17 +1435,21 @@ class FieldVisitViewSet(viewsets.ModelViewSet):
     serializer_class   = FieldVisitSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends    = [DjangoFilterBackend]
-    filterset_fields   = ['status', 'commune', 'contract']
+    filterset_fields   = ['status', 'commune', 'contract', 'worker']
 
     def get_queryset(self):
         user = self.request.user
         if user.user_type == 'ADMIN':
             return FieldVisit.objects.all().select_related(
-                'inspector', 'contract__worker__user', 'contract__employer__user'
+                'inspector',
+                'worker__user',
+                'contract__worker__user', 'contract__employer__user',
             )
         if is_admin_or_inspector(user):
             return FieldVisit.objects.filter(inspector=user).select_related(
-                'inspector', 'contract__worker__user', 'contract__employer__user'
+                'inspector',
+                'worker__user',
+                'contract__worker__user', 'contract__employer__user',
             )
         return FieldVisit.objects.none()
 

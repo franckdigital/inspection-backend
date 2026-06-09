@@ -247,9 +247,17 @@ class DomesticContract(models.Model):
 class TimeTracking(models.Model):
     """Pointage GPS employé de maison"""
 
+    worker = models.ForeignKey(
+        'DomesticWorker',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='time_trackings_direct',
+        verbose_name='Employé',
+    )
     contract = models.ForeignKey(
         DomesticContract,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
         related_name='time_trackings',
         verbose_name='Contrat'
     )
@@ -304,10 +312,16 @@ class TimeTracking(models.Model):
         verbose_name = 'Pointage'
         verbose_name_plural = 'Pointages'
         ordering = ['-date', '-check_in_time']
-        unique_together = ['contract', 'date']
+
+    def _worker_name(self):
+        if self.worker:
+            return self.worker.user.get_full_name()
+        if self.contract:
+            return self.contract.worker.user.get_full_name()
+        return '?'
 
     def __str__(self):
-        return f"{self.contract.worker.user.get_full_name()} - {self.date}"
+        return f"{self._worker_name()} - {self.date}"
 
     def calculate_hours(self):
         """Calcule les heures travaillées et supplémentaires"""
@@ -348,7 +362,7 @@ class OvertimeSession(models.Model):
         ordering = ['-start_time']
 
     def __str__(self):
-        return f"HS {self.tracking.date} — {self.tracking.contract.worker.user.get_full_name()}"
+        return f"HS {self.tracking.date} — {self.tracking._worker_name()}"
 
     def stop(self):
         from django.utils import timezone
@@ -375,9 +389,17 @@ class MonthlyPayslip(models.Model):
         ('PAID', 'Payé'),
     )
 
+    worker = models.ForeignKey(
+        'DomesticWorker',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='payslips_direct',
+        verbose_name='Employé',
+    )
     contract = models.ForeignKey(
         DomesticContract,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
         related_name='payslips',
         verbose_name='Contrat'
     )
@@ -430,10 +452,16 @@ class MonthlyPayslip(models.Model):
         verbose_name = 'Bulletin de paie'
         verbose_name_plural = 'Bulletins de paie'
         ordering = ['-month']
-        unique_together = ['contract', 'month']
+
+    def _worker_name(self):
+        if self.worker:
+            return self.worker.user.get_full_name()
+        if self.contract:
+            return self.contract.worker.user.get_full_name()
+        return '?'
 
     def __str__(self):
-        return f"Bulletin {self.contract.worker.user.get_full_name()} - {self.month.strftime('%B %Y')}"
+        return f"Bulletin {self._worker_name()} - {self.month.strftime('%B %Y')}"
 
     def calculate_totals(self):
         """Calcule les totaux"""
@@ -475,9 +503,17 @@ class LeaveRequest(models.Model):
         ('REJECTED', 'Rejeté'),
     )
 
+    worker = models.ForeignKey(
+        'DomesticWorker',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='leave_requests_direct',
+        verbose_name='Employé',
+    )
     contract = models.ForeignKey(
         DomesticContract,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
         related_name='leave_requests',
         verbose_name='Contrat'
     )
@@ -508,8 +544,15 @@ class LeaveRequest(models.Model):
         verbose_name_plural = 'Demandes de congé'
         ordering = ['-created_at']
 
+    def _worker_name(self):
+        if self.worker:
+            return self.worker.user.get_full_name()
+        if self.contract:
+            return self.contract.worker.user.get_full_name()
+        return '?'
+
     def __str__(self):
-        return f"{self.get_leave_type_display()} - {self.contract.worker.user.get_full_name()}"
+        return f"{self.get_leave_type_display()} - {self._worker_name()}"
 
 
 def generate_voice_case_number():
@@ -636,6 +679,13 @@ class FieldVisit(models.Model):
         related_name='field_visits',
         verbose_name='Inspecteur'
     )
+    worker = models.ForeignKey(
+        'DomesticWorker',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='field_visits_direct',
+        verbose_name='Employé lié',
+    )
     contract = models.ForeignKey(
         DomesticContract,
         on_delete=models.SET_NULL,
@@ -672,5 +722,10 @@ class FieldVisit(models.Model):
         ordering = ['-planned_date']
 
     def __str__(self):
-        name = self.contract.worker.user.get_full_name() if self.contract else '—'
+        if self.worker:
+            name = self.worker.user.get_full_name()
+        elif self.contract:
+            name = self.contract.worker.user.get_full_name()
+        else:
+            name = '—'
         return f"Visite {name} — {self.planned_date.date()}"

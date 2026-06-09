@@ -104,6 +104,7 @@ class SignContractSerializer(serializers.Serializer):
 
 class TimeTrackingSerializer(serializers.ModelSerializer):
     contract_info = serializers.SerializerMethodField()
+    worker_name   = serializers.SerializerMethodField()
 
     class Meta:
         model = TimeTracking
@@ -111,17 +112,34 @@ class TimeTrackingSerializer(serializers.ModelSerializer):
         read_only_fields = ('created_at', 'hours_worked', 'overtime_hours')
 
     def get_contract_info(self, obj):
-        return {
-            'worker': obj.contract.worker.user.get_full_name(),
-            'employer': obj.contract.employer.user.get_full_name()
-        }
+        if obj.contract:
+            return {
+                'worker':   obj.contract.worker.user.get_full_name(),
+                'employer': obj.contract.employer.user.get_full_name(),
+            }
+        if obj.worker:
+            return {'worker': obj.worker.user.get_full_name(), 'employer': None}
+        return None
+
+    def get_worker_name(self, obj):
+        if obj.worker:
+            return obj.worker.user.get_full_name()
+        if obj.contract:
+            return obj.contract.worker.user.get_full_name()
+        return None
 
 
 class CheckInSerializer(serializers.Serializer):
-    contract_id = serializers.IntegerField(required=True)
-    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
-    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
-    address = serializers.CharField(required=False, allow_blank=True)
+    contract_id = serializers.IntegerField(required=False, allow_null=True)
+    worker_id   = serializers.IntegerField(required=False, allow_null=True)
+    latitude    = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
+    longitude   = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
+    address     = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        if not data.get('contract_id') and not data.get('worker_id'):
+            raise serializers.ValidationError('contract_id ou worker_id requis.')
+        return data
 
 
 class CheckOutSerializer(serializers.Serializer):
@@ -133,6 +151,7 @@ class CheckOutSerializer(serializers.Serializer):
 
 class MonthlyPayslipSerializer(serializers.ModelSerializer):
     contract_info = serializers.SerializerMethodField()
+    worker_name   = serializers.SerializerMethodField()
 
     class Meta:
         model = MonthlyPayslip
@@ -140,21 +159,40 @@ class MonthlyPayslipSerializer(serializers.ModelSerializer):
         read_only_fields = ('generated_at', 'updated_at', 'gross_pay', 'total_deductions', 'net_pay')
 
     def get_contract_info(self, obj):
-        return {
-            'worker': obj.contract.worker.user.get_full_name(),
-            'employer': obj.contract.employer.user.get_full_name()
-        }
+        if obj.contract:
+            return {
+                'worker':   obj.contract.worker.user.get_full_name(),
+                'employer': obj.contract.employer.user.get_full_name(),
+            }
+        if obj.worker:
+            return {'worker': obj.worker.user.get_full_name(), 'employer': None}
+        return None
+
+    def get_worker_name(self, obj):
+        if obj.worker:
+            return obj.worker.user.get_full_name()
+        if obj.contract:
+            return obj.contract.worker.user.get_full_name()
+        return None
 
 
 class GeneratePayslipSerializer(serializers.Serializer):
-    contract_id = serializers.IntegerField(required=True)
-    month = serializers.DateField(required=True)
-    bonuses = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
+    contract_id      = serializers.IntegerField(required=False, allow_null=True)
+    worker_id        = serializers.IntegerField(required=False, allow_null=True)
+    month            = serializers.DateField(required=True)
+    base_salary      = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
+    bonuses          = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
     other_deductions = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
+
+    def validate(self, data):
+        if not data.get('contract_id') and not data.get('worker_id'):
+            raise serializers.ValidationError('contract_id ou worker_id requis.')
+        return data
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
     contract_info = serializers.SerializerMethodField()
+    worker_name   = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -162,10 +200,21 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         read_only_fields = ('created_at', 'responded_at')
 
     def get_contract_info(self, obj):
-        return {
-            'worker': obj.contract.worker.user.get_full_name(),
-            'employer': obj.contract.employer.user.get_full_name()
-        }
+        if obj.contract:
+            return {
+                'worker':   obj.contract.worker.user.get_full_name(),
+                'employer': obj.contract.employer.user.get_full_name(),
+            }
+        if obj.worker:
+            return {'worker': obj.worker.user.get_full_name(), 'employer': None}
+        return None
+
+    def get_worker_name(self, obj):
+        if obj.worker:
+            return obj.worker.user.get_full_name()
+        if obj.contract:
+            return obj.contract.worker.user.get_full_name()
+        return None
 
 
 class ApproveRejectLeaveSerializer(serializers.Serializer):
@@ -271,7 +320,7 @@ class FieldVisitSerializer(serializers.ModelSerializer):
     inspector_name   = serializers.SerializerMethodField()
     worker_name      = serializers.SerializerMethodField()
     employer_name    = serializers.SerializerMethodField()
-    worker_id        = serializers.SerializerMethodField()
+    effective_worker_id = serializers.SerializerMethodField()
     status_display   = serializers.SerializerMethodField()
 
     class Meta:
@@ -282,14 +331,23 @@ class FieldVisitSerializer(serializers.ModelSerializer):
     def get_inspector_name(self, obj):
         return obj.inspector.get_full_name()
 
+    def _effective_worker(self, obj):
+        if obj.worker:
+            return obj.worker
+        if obj.contract:
+            return obj.contract.worker
+        return None
+
     def get_worker_name(self, obj):
-        return obj.contract.worker.user.get_full_name() if obj.contract else None
+        w = self._effective_worker(obj)
+        return w.user.get_full_name() if w else None
 
     def get_employer_name(self, obj):
         return obj.contract.employer.user.get_full_name() if obj.contract else None
 
-    def get_worker_id(self, obj):
-        return obj.contract.worker.id if obj.contract else None
+    def get_effective_worker_id(self, obj):
+        w = self._effective_worker(obj)
+        return w.id if w else None
 
     def get_status_display(self, obj):
         return obj.get_status_display()
