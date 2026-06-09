@@ -664,7 +664,7 @@ class Command(BaseCommand):
                 session_type=stype,
                 status='SCHEDULED',
                 location=(
-                    f'Bureau de l\'inspection du travail — {mediator.inspectorprofile.inspection_zone.city}'
+                    f'Bureau de l\'inspection du travail — {mediator.inspector_profile.inspection_zone.city}'
                     if stype != 'ONLINE' else ''
                 ),
                 meeting_link='https://meet.inspection.ci/mediation' if stype != 'PRESENTIAL' else '',
