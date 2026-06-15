@@ -14,11 +14,12 @@ from .serializers import (
     CommuneSerializer, InspectorZoneAssignmentSerializer,
 )
 from enterprises.models import EnterpriseHistory
+from core.permissions import IsInspecteur, IsChefInspection
 
 
 class InspectionZoneViewSet(viewsets.ModelViewSet):
     queryset = InspectionZone.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['region', 'city', 'is_active']
     search_fields = ['name', 'code', 'city', 'region']
@@ -63,7 +64,8 @@ class InspectionZoneViewSet(viewsets.ModelViewSet):
             ).count(),
         })
 
-    @action(detail=True, methods=['post'], url_path='assign-inspector')
+    @action(detail=True, methods=['post'], url_path='assign-inspector',
+            permission_classes=[IsChefInspection])
     def assign_inspector(self, request, pk=None):
         """Affecter un inspecteur à la zone."""
         zone = self.get_object()
@@ -98,7 +100,7 @@ class InspectionZoneViewSet(viewsets.ModelViewSet):
 
 class InspectionRecordViewSet(viewsets.ModelViewSet):
     queryset = InspectionRecord.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['inspection_type', 'result', 'is_completed', 'inspector', 'enterprise']
     search_fields = ['enterprise__name', 'location', 'findings']
@@ -401,7 +403,7 @@ class InspectionRecordViewSet(viewsets.ModelViewSet):
 class CommuneViewSet(viewsets.ModelViewSet):
     queryset = Commune.objects.filter(is_active=True).select_related('zone')
     serializer_class = CommuneSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['zone', 'city', 'region', 'is_active']
     search_fields = ['name', 'code', 'city']
@@ -412,7 +414,7 @@ class CommuneViewSet(viewsets.ModelViewSet):
 class InspectorZoneAssignmentViewSet(viewsets.ModelViewSet):
     queryset = InspectorZoneAssignment.objects.filter(is_active=True).select_related('zone', 'inspector')
     serializer_class = InspectorZoneAssignmentSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsChefInspection]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['zone', 'inspector', 'role', 'is_active']
 

@@ -146,7 +146,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'fr-fr'
 
-TIME_ZONE = 'Africa/Brazzaville'
+TIME_ZONE = 'Africa/Abidjan'
 
 USE_I18N = True
 
@@ -268,9 +268,12 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+# Le planning Celery Beat est défini dans config/celery.py (app.conf.beat_schedule)
 
 # Frontend URL
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
 
-# OpenAI — Whisper (transcription) + GPT (traduction langues locales)
+# OpenAI — Whisper (transcription) + GPT
 OPENAI_API_KEY = config('OPENAI_API_KEY', default='')
+# Claude (Anthropic) — Chatbot juridique principal
+ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')

@@ -10,11 +10,12 @@ from complaints.models import Complaint
 from enterprises.models import Enterprise
 from inspections.models import InspectionRecord
 from mediations.models import Mediation
+from core.permissions import IsInspecteur, IsDirecteurGeneral
 
 
 class NationalStatsView(APIView):
     """Statistiques nationales temps réel"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     def get(self, request):
         # Plaintes
@@ -62,7 +63,7 @@ class NationalStatsView(APIView):
 
 class TrendsView(APIView):
     """Tendances et évolutions"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     def get(self, request):
         days = int(request.query_params.get('days', 30))
@@ -95,7 +96,7 @@ class TrendsView(APIView):
 
 class ComplaintsByTypeView(APIView):
     """Répartition par type de plainte"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     def get(self, request):
         by_type = Complaint.objects.values('complaint_type').annotate(
@@ -109,7 +110,7 @@ class ComplaintsByTypeView(APIView):
 
 class ComplaintsByRegionView(APIView):
     """Répartition par région"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     def get(self, request):
         by_region = Complaint.objects.values('inspection_zone__region').annotate(
@@ -122,7 +123,7 @@ class ComplaintsByRegionView(APIView):
 
 class TopEnterprisesView(APIView):
     """Top entreprises par nombre de plaintes"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     def get(self, request):
         limit = int(request.query_params.get('limit', 10))
@@ -136,7 +137,7 @@ class TopEnterprisesView(APIView):
 
 class PerformanceMetricsView(APIView):
     """Métriques de performance"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     def get(self, request):
         # Délai moyen de résolution
@@ -165,7 +166,7 @@ class PerformanceMetricsView(APIView):
 
 class ExecutiveDashboardView(APIView):
     """Dashboard pour les cadres (DG, Ministre)"""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsDirecteurGeneral]
 
     def get(self, request):
         # KPIs principaux

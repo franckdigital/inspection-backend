@@ -13,12 +13,13 @@ from .serializers import (
 )
 from complaints.models import Complaint, ComplaintStatusHistory, ComplaintNotification
 from users.models import User
+from core.permissions import IsChefInspection, IsInspecteur
 
 
 class WorkflowApprovalViewSet(viewsets.ModelViewSet):
     queryset = WorkflowApproval.objects.all()
     serializer_class = WorkflowApprovalSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsChefInspection]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['status', 'level', 'approver', 'complaint']
 
@@ -127,7 +128,7 @@ class WorkflowApprovalViewSet(viewsets.ModelViewSet):
 class EscalationViewSet(viewsets.ModelViewSet):
     queryset = Escalation.objects.all()
     serializer_class = EscalationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['reason', 'is_resolved', 'complaint']
 
@@ -196,7 +197,7 @@ class EscalationViewSet(viewsets.ModelViewSet):
 class DelegationViewSet(viewsets.ModelViewSet):
     queryset = Delegation.objects.all()
     serializer_class = DelegationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsChefInspection]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['is_active', 'from_user', 'to_user']
 
@@ -224,7 +225,7 @@ class DelegationViewSet(viewsets.ModelViewSet):
 class ReassignmentHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ReassignmentHistory.objects.all()
     serializer_class = ReassignmentHistorySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsChefInspection]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['complaint', 'from_inspector', 'to_inspector']
 

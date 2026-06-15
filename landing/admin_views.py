@@ -14,6 +14,7 @@ from .serializers import (
     TestimonialSerializer, CampaignSerializer,
     InspectionOfficeSerializer
 )
+from core.permissions import IsAdmin
 
 
 class AIKeywordResponseSerializer:
@@ -26,7 +27,7 @@ class AIKeywordResponseSerializer:
 class AIKeywordResponseViewSet(viewsets.ModelViewSet):
     """CRUD complet pour gérer les réponses de l'assistant IA"""
     queryset = AIKeywordResponse.objects.all().order_by('priority')
-    permission_classes = [permissions.IsAuthenticated]  # Temporairement, à changer en IsAdminUser
+    permission_classes = [IsAdmin]
 
     def get_serializer_class(self):
         # Retourner les données directement en JSON pour le moment
@@ -62,14 +63,14 @@ class FAQViewSet(viewsets.ModelViewSet):
     """CRUD complet pour gérer les FAQs"""
     queryset = FAQ.objects.all().order_by('category', 'order')
     serializer_class = FAQSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
 
 class ContactMessageViewSet(viewsets.ModelViewSet):
     """CRUD complet pour gérer les messages de contact"""
     queryset = ContactMessage.objects.all().order_by('-created_at')
     serializer_class = ContactMessageSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
@@ -84,18 +85,18 @@ class TestimonialViewSet(viewsets.ModelViewSet):
     """CRUD complet pour gérer les témoignages"""
     queryset = Testimonial.objects.all().order_by('-published_at')
     serializer_class = TestimonialSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
 
 class CampaignViewSet(viewsets.ModelViewSet):
     """CRUD complet pour gérer les campagnes"""
     queryset = Campaign.objects.all().order_by('-start_date')
     serializer_class = CampaignSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
 
 class InspectionOfficeViewSet(viewsets.ModelViewSet):
     """CRUD complet pour gérer les bureaux d'inspection"""
     queryset = InspectionOffice.objects.all().order_by('region', 'name')
     serializer_class = InspectionOfficeSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]

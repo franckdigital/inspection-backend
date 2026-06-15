@@ -11,12 +11,13 @@ from .serializers import (
     TransmitToCourtSerializer
 )
 from complaints.models import ComplaintStatusHistory, ComplaintNotification
+from core.permissions import IsInspecteur, IsChefInspection
 
 
 class JudicialProcedureViewSet(viewsets.ModelViewSet):
     queryset = JudicialProcedure.objects.all()
     serializer_class = JudicialProcedureSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['status', 'procedure_type', 'plaintiff', 'case_officer']
 
@@ -132,7 +133,7 @@ class JudicialProcedureViewSet(viewsets.ModelViewSet):
 class HearingViewSet(viewsets.ModelViewSet):
     queryset = Hearing.objects.all()
     serializer_class = HearingSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['status', 'hearing_type', 'procedure']
 
@@ -180,6 +181,6 @@ class HearingViewSet(viewsets.ModelViewSet):
 class JudicialDecisionViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = JudicialDecision.objects.all()
     serializer_class = JudicialDecisionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['decision_type', 'outcome', 'is_final']

@@ -1,4 +1,4 @@
-from rest_framework import viewsets, permissions, status
+﻿from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
@@ -13,6 +13,7 @@ from .models import (
     TimeTracking, MonthlyPayslip, LeaveRequest, VoiceComplaint, OvertimeSession,
     FieldVisit,
 )
+from core.permissions import IsInspecteur, IsInspecteurOrEmploye, IsInspecteurOrEmployeur
 from .serializers import (
     DomesticWorkerSerializer, DomesticEmployerSerializer,
     DomesticContractSerializer, SignContractSerializer,
@@ -212,7 +213,7 @@ def _resolve_inspector_for_complaint(worker, commune: str):
 
 class DomesticWorkerViewSet(viewsets.ModelViewSet):
     serializer_class = DomesticWorkerSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurOrEmploye]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['specialization', 'is_available']
 
@@ -422,7 +423,7 @@ class DomesticWorkerViewSet(viewsets.ModelViewSet):
 
 class DomesticEmployerViewSet(viewsets.ModelViewSet):
     serializer_class = DomesticEmployerSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurOrEmployeur]
 
     def get_queryset(self):
         user = self.request.user
@@ -460,7 +461,7 @@ class DomesticEmployerViewSet(viewsets.ModelViewSet):
 
 class DomesticContractViewSet(viewsets.ModelViewSet):
     serializer_class = DomesticContractSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurOrEmployeur]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['status', 'worker', 'employer']
 
@@ -695,7 +696,7 @@ class DomesticContractViewSet(viewsets.ModelViewSet):
 
 class TimeTrackingViewSet(viewsets.ModelViewSet):
     serializer_class = TimeTrackingSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurOrEmploye]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['contract', 'worker', 'date', 'is_validated']
 
@@ -1038,7 +1039,7 @@ class TimeTrackingViewSet(viewsets.ModelViewSet):
 
 class MonthlyPayslipViewSet(viewsets.ModelViewSet):
     serializer_class = MonthlyPayslipSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['contract', 'worker', 'status', 'month']
 
@@ -1162,7 +1163,7 @@ class MonthlyPayslipViewSet(viewsets.ModelViewSet):
 
 class LeaveRequestViewSet(viewsets.ModelViewSet):
     serializer_class = LeaveRequestSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurOrEmploye]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['contract', 'worker', 'status', 'leave_type']
 
@@ -1212,7 +1213,7 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
 
 class OvertimeSessionViewSet(viewsets.GenericViewSet):
     serializer_class = OvertimeSessionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurOrEmploye]
 
     def _get_today_tracking(self, user):
         """
@@ -1290,7 +1291,7 @@ class OvertimeSessionViewSet(viewsets.GenericViewSet):
 
 class VoiceComplaintViewSet(viewsets.ModelViewSet):
     serializer_class = VoiceComplaintSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurOrEmploye]
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):
@@ -1437,7 +1438,7 @@ class VoiceComplaintViewSet(viewsets.ModelViewSet):
 
 class FieldVisitViewSet(viewsets.ModelViewSet):
     serializer_class   = FieldVisitSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends    = [DjangoFilterBackend]
     filterset_fields   = ['status', 'commune', 'contract', 'worker']
 

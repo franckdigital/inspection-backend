@@ -11,12 +11,13 @@ from .serializers import (
     RolePermissionSerializer, UserAdminSerializer, UserAdminCreateSerializer,
 )
 from users.models import User
+from core.permissions import IsAdmin
 
 
 class SystemConfigurationViewSet(viewsets.ModelViewSet):
     queryset = SystemConfiguration.objects.all()
     serializer_class = SystemConfigurationSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
 
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
@@ -25,7 +26,7 @@ class SystemConfigurationViewSet(viewsets.ModelViewSet):
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = AuditLog.objects.all()
     serializer_class = AuditLogSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
 
     @action(detail=False, methods=['get'])
     def statistics(self, request):
@@ -41,7 +42,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 class BackupLogViewSet(viewsets.ModelViewSet):
     queryset = BackupLog.objects.all()
     serializer_class = BackupLogSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
 
     @action(detail=False, methods=['post'])
     def trigger_backup(self, request):
@@ -66,7 +67,7 @@ class BackupLogViewSet(viewsets.ModelViewSet):
 class MaintenanceModeViewSet(viewsets.ModelViewSet):
     queryset = MaintenanceMode.objects.all()
     serializer_class = MaintenanceModeSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
 
     @action(detail=False, methods=['post'])
     def activate(self, request):
@@ -97,19 +98,19 @@ class MaintenanceModeViewSet(viewsets.ModelViewSet):
 class PermissionViewSet(viewsets.ModelViewSet):
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
 
 
 class RoleViewSet(viewsets.ModelViewSet):
     queryset = Role.objects.all()
     serializer_class = RoleSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
 
 
 class RolePermissionViewSet(viewsets.ModelViewSet):
     queryset = RolePermission.objects.all()
     serializer_class = RolePermissionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
     @action(detail=False, methods=['post'])
     def save_matrix(self, request):
@@ -131,7 +132,7 @@ class RolePermissionViewSet(viewsets.ModelViewSet):
 
 class UserAdminViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all().order_by('last_name', 'first_name')
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
     def get_serializer_class(self):
         if self.action == 'create':

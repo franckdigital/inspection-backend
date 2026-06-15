@@ -9,11 +9,15 @@ from .serializers import (
     ComplaintDocumentSerializer, ComplaintCommentSerializer,
     ComplaintStatusHistorySerializer, ComplaintNotificationSerializer
 )
+from core.permissions import (
+    IsInspecteur, IsChefInspection, IsInspecteurOrEmploye, IsOwnerOrInspecteur
+)
 
 
 class ComplaintViewSet(viewsets.ModelViewSet):
     queryset = Complaint.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
+    # Employés peuvent créer et voir leurs propres plaintes ; inspecteurs+ gèrent tout
+    permission_classes = [IsInspecteurOrEmploye]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['status', 'priority', 'complaint_type', 'assigned_to', 'inspection_zone']
     search_fields = ['complaint_number', 'subject', 'description', 'employer_name']
@@ -45,7 +49,7 @@ class ComplaintViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsChefInspection])
     def assign(self, request, pk=None):
         complaint = self.get_object()
         inspector_id = request.data.get('inspector_id')
@@ -85,7 +89,7 @@ class ComplaintViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsInspecteur])
     def update_status(self, request, pk=None):
         complaint = self.get_object()
         new_status = request.data.get('status')

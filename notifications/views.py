@@ -8,18 +8,19 @@ from .serializers import (
     SendEmailSerializer, SendTemplateEmailSerializer, SendSMSSerializer, SendTemplateSMSSerializer
 )
 from .services import EmailService, SMSService
+from core.permissions import IsAdmin, IsInspecteur
 
 
 class EmailTemplateViewSet(viewsets.ModelViewSet):
     queryset = EmailTemplate.objects.all()
     serializer_class = EmailTemplateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
 
 class EmailLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = EmailLog.objects.all()
     serializer_class = EmailLogSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     @action(detail=False, methods=['post'])
     def send(self, request):
@@ -54,13 +55,13 @@ class EmailLogViewSet(viewsets.ReadOnlyModelViewSet):
 class SMSTemplateViewSet(viewsets.ModelViewSet):
     queryset = SMSTemplate.objects.all()
     serializer_class = SMSTemplateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdmin]
 
 
 class SMSLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SMSLog.objects.all()
     serializer_class = SMSLogSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     @action(detail=False, methods=['post'])
     def send(self, request):

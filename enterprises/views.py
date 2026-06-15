@@ -7,11 +7,13 @@ from .serializers import (
     EnterpriseSerializer, EnterpriseDetailSerializer, EnterpriseBranchSerializer,
     EnterpriseDocumentSerializer, EnterpriseHistorySerializer
 )
+from core.permissions import IsInspecteur, IsInspecteurOrEmployeur, IsInspecteurReadOnly
 
 
 class EnterpriseViewSet(viewsets.ModelViewSet):
     queryset = Enterprise.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
+    # Lecture : inspecteurs + employeurs ; écriture/suppression : inspecteurs uniquement
+    permission_classes = [IsInspecteurReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['sector', 'city', 'risk_level', 'is_active', 'is_verified']
     search_fields = ['name', 'rccm', 'nif', 'email']
@@ -56,7 +58,7 @@ class EnterpriseViewSet(viewsets.ModelViewSet):
 class EnterpriseBranchViewSet(viewsets.ModelViewSet):
     queryset = EnterpriseBranch.objects.all()
     serializer_class = EnterpriseBranchSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['enterprise', 'city', 'is_active']
     search_fields = ['name', 'city', 'manager_name']
@@ -65,7 +67,7 @@ class EnterpriseBranchViewSet(viewsets.ModelViewSet):
 class EnterpriseDocumentViewSet(viewsets.ModelViewSet):
     queryset = EnterpriseDocument.objects.all()
     serializer_class = EnterpriseDocumentSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteurReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['enterprise', 'document_type', 'is_verified']
 
@@ -73,6 +75,6 @@ class EnterpriseDocumentViewSet(viewsets.ModelViewSet):
 class EnterpriseHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = EnterpriseHistory.objects.all()
     serializer_class = EnterpriseHistorySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['enterprise', 'event_type']

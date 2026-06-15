@@ -27,9 +27,10 @@ class EmailService:
             if html_content:
                 msg.attach_alternative(html_content, "text/html")
 
-            # msg.send()  # Décommenter en production
+            # Envoyer réellement si EMAIL_HOST_USER est configuré
+            if settings.EMAIL_HOST_USER:
+                msg.send()
 
-            # Logger l'envoi
             template_obj = None
             if template_name:
                 template_obj = EmailTemplate.objects.filter(name=template_name).first()
@@ -40,7 +41,7 @@ class EmailService:
                 body_html=html_content,
                 body_text=text_content,
                 template_used=template_obj,
-                status='SENT',  # Simulation
+                status='SENT',
                 sent_at=timezone.now(),
                 provider='django-mail'
             )

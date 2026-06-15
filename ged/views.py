@@ -8,18 +8,19 @@ from .serializers import (
     DocumentCategorySerializer, DocumentSerializer, DocumentVersionSerializer,
     DocumentAccessSerializer, ArchiveSerializer
 )
+from core.permissions import IsInspecteur
 
 
 class DocumentCategoryViewSet(viewsets.ModelViewSet):
     queryset = DocumentCategory.objects.all()
     serializer_class = DocumentCategorySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
     queryset = Document.objects.all()
     serializer_class = DocumentSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -83,16 +84,16 @@ class DocumentViewSet(viewsets.ModelViewSet):
 class DocumentVersionViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DocumentVersion.objects.all()
     serializer_class = DocumentVersionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
 
 class DocumentAccessViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DocumentAccess.objects.all()
     serializer_class = DocumentAccessSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
 
 
 class ArchiveViewSet(viewsets.ModelViewSet):
     queryset = Archive.objects.all()
     serializer_class = ArchiveSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsInspecteur]
