@@ -77,15 +77,13 @@ class ComplaintCreateSerializer(serializers.ModelSerializer):
         model = Complaint
         fields = [
             'complaint_type', 'subject', 'description', 'enterprise',
-            'employer_name', 'workplace_address', 'workplace_latitude',
-            'workplace_longitude', 'incident_date'
+            'employer_name', 'workplace_commune', 'workplace_address',
+            'workplace_latitude', 'workplace_longitude', 'incident_date',
         ]
 
     def create(self, validated_data):
         validated_data['complainant'] = self.context['request'].user
-        complaint = Complaint.objects.create(**validated_data)
-        complaint.assign_to_zone()
-        return complaint
+        return Complaint.objects.create(**validated_data)
 
 
 class ComplaintNotificationSerializer(serializers.ModelSerializer):

@@ -67,6 +67,11 @@ class Complaint(models.Model):
 
     employer_name = models.CharField(max_length=255, blank=True, verbose_name='Nom de l\'employeur')
     workplace_address = models.TextField(verbose_name='Adresse du lieu de travail')
+    workplace_commune = models.CharField(
+        max_length=100, blank=True,
+        verbose_name='Commune du lieu de travail',
+        help_text='Commune ou sous-préfecture (ex: Yopougon, Cocody, Marcory). Utilisée pour l\'assignation automatique.'
+    )
     workplace_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     workplace_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
 
@@ -114,17 +119,33 @@ class Complaint(models.Model):
         return f"{self.complaint_number} - {self.get_complaint_type_display()}"
 
     def assign_to_zone(self):
+        """Résolution zone via commune (prioritaire) puis coordonnées GPS (fallback)."""
+        from inspections.models import Commune, InspectionZone
+
+        # 1) Matching par commune (cas nominal)
+        if self.workplace_commune:
+            commune = (
+                Commune.objects
+                .filter(name__icontains=self.workplace_commune.strip(), is_active=True)
+                .select_related('zone')
+                .first()
+            )
+            if commune and commune.zone and commune.zone.is_active:
+                self.inspection_zone = commune.zone
+                self.save(update_fields=['inspection_zone'])
+                return
+
+        # 2) Fallback GPS si commune introuvable
         if self.workplace_latitude and self.workplace_longitude:
-            from inspections.models import InspectionZone
-            zones = InspectionZone.objects.filter(is_active=True)
-            for zone in zones:
-                if zone.latitude and zone.longitude:
-                    distance = ((self.workplace_latitude - zone.latitude) ** 2 +
-                              (self.workplace_longitude - zone.longitude) ** 2) ** 0.5
-                    if distance < 0.5:
-                        self.inspection_zone = zone
-                        self.save(update_fields=['inspection_zone'])
-                        break
+            for zone in InspectionZone.objects.filter(is_active=True, latitude__isnull=False):
+                distance = (
+                    (float(self.workplace_latitude) - float(zone.latitude)) ** 2 +
+                    (float(self.workplace_longitude) - float(zone.longitude)) ** 2
+                ) ** 0.5
+                if distance < 0.5:
+                    self.inspection_zone = zone
+                    self.save(update_fields=['inspection_zone'])
+                    return
 
 
 class ComplaintDocument(models.Model):

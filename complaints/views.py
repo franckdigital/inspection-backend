@@ -30,6 +30,17 @@ class ComplaintViewSet(viewsets.ModelViewSet):
             return ComplaintDetailSerializer
         return ComplaintSerializer
 
+    def perform_create(self, serializer):
+        from .services import auto_assign_complaint
+        complaint = serializer.save()
+        try:
+            auto_assign_complaint(complaint)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                'auto_assign_complaint failed for complaint %s', complaint.pk
+            )
+
     def get_queryset(self):
         from django.db.models import Q
         user = self.request.user
@@ -48,6 +59,82 @@ class ComplaintViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(complainant=user)
 
         return queryset
+
+    @action(detail=True, methods=['get'], permission_classes=[IsInspecteur])
+    def suggest_delegates(self, request, pk=None):
+        """
+        Retourne la liste des collègues de la zone avec leur charge courante.
+        Utilisé par l'inspecteur pour choisir un délégué.
+        """
+        complaint = self.get_object()
+        if not complaint.inspection_zone:
+            return Response(
+                {'error': "Aucune zone d'inspection associée à cette plainte."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .services import get_zone_inspectors_load
+        inspectors = list(
+            get_zone_inspectors_load(complaint.inspection_zone)
+            .exclude(id=request.user.id)
+        )
+        return Response({'inspectors': inspectors})
+
+    @action(detail=True, methods=['post'], permission_classes=[IsInspecteur])
+    def delegate(self, request, pk=None):
+        """
+        L'inspecteur courant délègue la plainte à un collègue de la même zone.
+        Body : { "inspector_id": <int>, "reason": "<str>" }
+        """
+        complaint = self.get_object()
+
+        if complaint.assigned_to != request.user:
+            return Response(
+                {'error': "Vous ne pouvez déléguer que les plaintes qui vous sont assignées."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        inspector_id = request.data.get('inspector_id')
+        reason = request.data.get('reason', '').strip()
+        if not inspector_id:
+            return Response(
+                {'error': 'inspector_id est requis.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from users.models import User
+        from inspections.models import InspectorZoneAssignment
+        from .services import assign_complaint
+
+        try:
+            delegate_inspector = User.objects.get(
+                id=inspector_id, user_type='INSPECTEUR', is_active=True
+            )
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'Inspecteur introuvable.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Vérification que le délégué est bien dans la même zone
+        if complaint.inspection_zone and not InspectorZoneAssignment.objects.filter(
+            inspector=delegate_inspector, zone=complaint.inspection_zone, is_active=True
+        ).exists():
+            return Response(
+                {'error': "Cet inspecteur n'appartient pas à la zone de la plainte."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        assign_complaint(
+            complaint,
+            delegate_inspector,
+            assigned_by=request.user,
+            reason=reason or (
+                f'Délégation par {request.user.get_full_name()} '
+                f'→ {delegate_inspector.get_full_name()}'
+            ),
+        )
+        return Response({'message': f'Plainte déléguée à {delegate_inspector.get_full_name()}.'})
 
     @action(detail=True, methods=['post'], permission_classes=[IsChefInspection])
     def assign(self, request, pk=None):
